@@ -1,0 +1,35 @@
+{
+  "case_id": "state_change_003",
+  "scope": "Input Variables",
+  "current_state": {
+    "entities": [
+      {
+        "id": 12,
+        "type": "Idea",
+        "name": "MLD input variable",
+        "state": "practiced"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "After adding MLD, recall improved slightly but is unstable; mark it as experimental."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "ENTITY_UPDATED",
+    "should_create_candidate": false,
+    "should_create_entity": true,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Input Variables",
+    "target_entity": "MLD input variable",
+    "state_change": {
+      "state": "experimental"
+    },
+    "operation": "set_state"
+  }
+}

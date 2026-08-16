@@ -1,0 +1,23 @@
+{
+  "case_id": "no_change_001",
+  "scope": "Paper Visualization",
+  "current_state": {
+    "entities": [],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Draw a figure for Hobday Category I-IV results."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NO_CHANGE",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": false,
+    "expected_scope": "Paper Visualization"
+  }
+}

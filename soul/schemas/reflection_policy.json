@@ -1,0 +1,13 @@
+﻿{
+  "version": 1,
+  "min_fragment_length": 8,
+  "ignored_prefixes": [
+    "<recommended_plugins>",
+    "<environment_context>",
+    "<apps_instructions>",
+    "<plugins_instructions>",
+    "<skills_instructions>",
+    "# AGENTS.md instructions",
+    "<turn_aborted>"
+  ]
+}

@@ -1,0 +1,620 @@
+[
+  {
+    "id": "coding_auth_001",
+    "category": "coding_project_memory",
+    "title": "避免重复使用已否决的认证 helper",
+    "project_brief": "Project Atlas is a multi-tenant TypeScript service. The next answer should make a concrete implementation recommendation.",
+    "evidence": [
+      {
+        "summary": "The team tried oldAuthHelper in the tenant authorization path. It dropped tenant scope and was rejected.",
+        "memory": "oldAuthHelper dropped tenant scope and should not be reused for tenant authorization.",
+        "state_items": [
+          {
+            "id": "old-auth-helper-rejected",
+            "kind": "rejected_direction",
+            "statement": "Do not recommend oldAuthHelper for tenant authorization because it drops tenant scope.",
+            "priority": "high",
+            "confidence": 0.92
+          }
+        ]
+      },
+      {
+        "summary": "newAuthContext preserved tenant scope in the integration smoke test.",
+        "memory": "newAuthContext preserved tenant scope in smoke tests.",
+        "state_items": [
+          {
+            "id": "new-auth-context-working",
+            "kind": "working_hypothesis",
+            "statement": "Prefer newAuthContext for tenant authorization until deeper tests prove otherwise.",
+            "priority": "medium",
+            "confidence": 0.78
+          }
+        ]
+      }
+    ],
+    "task": "For the next tenant authorization change, recommend the implementation direction.",
+    "expected": {
+      "should_include": ["newAuthContext", "tenant scope"],
+      "should_not_include": ["Use oldAuthHelper"],
+      "rubric": [
+        {
+          "id": "uses_valid_direction",
+          "requires_any": ["newAuthContext"],
+          "forbids": ["Use oldAuthHelper"]
+        },
+        {
+          "id": "mentions_rejected_reason",
+          "requires_any": ["drops tenant scope", "tenant scope"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "coding_api_002",
+    "category": "coding_project_memory",
+    "title": "保持迁移窗口内的兼容约束",
+    "project_brief": "Project Atlas is migrating API contracts. The next answer should avoid risky interface changes.",
+    "evidence": [
+      {
+        "summary": "The migration window requires keeping the public API response shape stable for two releases.",
+        "memory": "Public API response shape must stay stable for two releases.",
+        "state_items": [
+          {
+            "id": "stable-public-api-window",
+            "kind": "active_constraint",
+            "statement": "Do not change public API response shape during the two-release migration window.",
+            "priority": "high",
+            "confidence": 0.95
+          }
+        ]
+      },
+      {
+        "summary": "Adding internal metadata is acceptable if it is not exposed to clients.",
+        "memory": "Internal metadata can be added if not exposed to clients.",
+        "state_items": [
+          {
+            "id": "internal-metadata-ok",
+            "kind": "accepted_belief",
+            "statement": "Internal metadata is acceptable when it does not alter the public response contract.",
+            "priority": "medium",
+            "confidence": 0.82
+          }
+        ]
+      }
+    ],
+    "task": "How should we add request diagnostics to the API handler?",
+    "expected": {
+      "should_include": ["internal metadata", "public API response shape"],
+      "should_not_include": ["change the public API response shape"],
+      "rubric": [
+        {
+          "id": "respects_contract_constraint",
+          "requires_any": ["public API response shape", "public response contract"],
+          "forbids": ["change the public API response shape"]
+        },
+        {
+          "id": "suggests_safe_route",
+          "requires_any": ["internal metadata", "not exposed"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "research_focal_001",
+    "category": "research_experiment_continuity",
+    "title": "不要重复建议收益有限的 Focal Loss",
+    "project_brief": "MHW is an ML research project optimizing rare-event detection. The next answer should suggest the next experiment.",
+    "evidence": [
+      {
+        "summary": "Focal Loss was tried for rare-event detection and improved recall slightly but reduced precision enough that the net benefit was limited.",
+        "memory": "Focal Loss was tried; recall improved slightly but precision dropped, so net benefit was limited.",
+        "state_items": [
+          {
+            "id": "focal-loss-limited",
+            "kind": "rejected_direction",
+            "statement": "Do not repeat Focal Loss as the main next recommendation; prior trial had limited net benefit due to precision loss.",
+            "priority": "high",
+            "confidence": 0.9
+          }
+        ]
+      },
+      {
+        "summary": "MLD remains an unverified direction for improving event-boundary consistency.",
+        "memory": "MLD is an unverified but still open direction for boundary consistency.",
+        "state_items": [
+          {
+            "id": "mld-unverified-direction",
+            "kind": "working_hypothesis",
+            "statement": "MLD is an unverified direction that may improve event-boundary consistency; next step should be a small controlled validation.",
+            "priority": "medium",
+            "confidence": 0.62
+          }
+        ]
+      }
+    ],
+    "task": "Suggest the next loss-function or training-direction experiment for MHW.",
+    "expected": {
+      "should_include": ["MLD", "small controlled validation"],
+      "should_not_include": ["try Focal Loss"],
+      "rubric": [
+        {
+          "id": "does_not_repeat_rejected_trial",
+          "requires_any": ["Focal Loss"],
+          "forbids": ["try Focal Loss", "use Focal Loss as the next"]
+        },
+        {
+          "id": "keeps_mld_continuity",
+          "requires_any": ["MLD", "controlled validation"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "research_backbone_002",
+    "category": "research_experiment_continuity",
+    "title": "遵守暂不更换 Backbone 的约束",
+    "project_brief": "MHW is an ML research project. The next answer should recommend an experiment under current constraints.",
+    "evidence": [
+      {
+        "summary": "The current constraint is not to replace the backbone before the next ablation report, because comparability matters more than raw accuracy this week.",
+        "memory": "Do not replace the backbone before the next ablation report.",
+        "state_items": [
+          {
+            "id": "no-backbone-change-now",
+            "kind": "active_constraint",
+            "statement": "Do not recommend replacing the backbone before the next ablation report; keep comparability with current runs.",
+            "priority": "high",
+            "confidence": 0.93
+          }
+        ]
+      },
+      {
+        "summary": "Feature-level calibration and threshold sweeps are allowed under the current comparability constraint.",
+        "memory": "Calibration and threshold sweeps are allowed.",
+        "state_items": [
+          {
+            "id": "calibration-allowed",
+            "kind": "accepted_belief",
+            "statement": "Feature-level calibration and threshold sweeps are allowed while keeping the backbone fixed.",
+            "priority": "medium",
+            "confidence": 0.84
+          }
+        ]
+      }
+    ],
+    "task": "We need a next experiment to improve MHW performance this week. What should we do?",
+    "expected": {
+      "should_include": ["backbone", "calibration"],
+      "should_not_include": ["replace the backbone"],
+      "rubric": [
+        {
+          "id": "respects_backbone_constraint",
+          "requires_any": ["keep the backbone fixed", "backbone fixed"],
+          "forbids": ["replace the backbone", "switch backbone"]
+        },
+        {
+          "id": "suggests_allowed_experiment",
+          "requires_any": ["calibration", "threshold"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "research_mld_003",
+    "category": "research_experiment_continuity",
+    "title": "保持 MLD 未验证方向的连续性",
+    "project_brief": "MHW is trying to improve event-boundary consistency without exploding labeling cost.",
+    "evidence": [
+      {
+        "summary": "MLD has not been validated yet, but it is the only direction explicitly tied to event-boundary consistency.",
+        "memory": "MLD remains unvalidated and related to event-boundary consistency.",
+        "state_items": [
+          {
+            "id": "mld-boundary-hypothesis",
+            "kind": "working_hypothesis",
+            "statement": "MLD is unvalidated but directly targets event-boundary consistency; validate it with a small ablation before broader changes.",
+            "priority": "high",
+            "confidence": 0.66
+          }
+        ]
+      },
+      {
+        "summary": "A large new labeling campaign is still an open question, not an accepted decision.",
+        "memory": "Large new labeling is unresolved and not yet accepted.",
+        "state_items": [
+          {
+            "id": "large-labeling-open",
+            "kind": "open_question",
+            "statement": "Whether to start a large new labeling campaign is unresolved; do not treat it as approved.",
+            "priority": "medium",
+            "confidence": 0.58
+          }
+        ]
+      }
+    ],
+    "task": "How should we continue the MHW investigation after the latest results?",
+    "expected": {
+      "should_include": ["MLD", "ablation"],
+      "should_not_include": ["start a large new labeling campaign"],
+      "rubric": [
+        {
+          "id": "preserves_unverified_direction",
+          "requires_any": ["MLD", "small ablation"],
+          "forbids": []
+        },
+        {
+          "id": "does_not_promote_open_question",
+          "requires_any": ["unresolved", "not approved", "open question"],
+          "forbids": ["start a large new labeling campaign"]
+        }
+      ]
+    }
+  },
+  {
+    "id": "product_pricing_001",
+    "category": "product_decision_constraints",
+    "title": "不把待评审定价当成已决策",
+    "project_brief": "Nimbus is preparing pricing changes. The next answer should distinguish accepted decisions from unresolved proposals.",
+    "evidence": [
+      {
+        "summary": "The team discussed a usage-based pricing tier but explicitly marked it as needs review after sales feedback.",
+        "memory": "Usage-based pricing was discussed and needs review.",
+        "state_items": [
+          {
+            "id": "usage-pricing-needs-review",
+            "kind": "open_question",
+            "statement": "Usage-based pricing is only a proposal that needs review; do not present it as an accepted launch decision.",
+            "status": "needs_review",
+            "priority": "high",
+            "confidence": 0.6
+          }
+        ]
+      },
+      {
+        "summary": "The accepted direction is to improve seat-based packaging clarity first.",
+        "memory": "Seat-based packaging clarity is the accepted near-term direction.",
+        "state_items": [
+          {
+            "id": "seat-packaging-first",
+            "kind": "accepted_belief",
+            "statement": "The accepted near-term direction is improving seat-based packaging clarity before changing pricing mechanics.",
+            "priority": "high",
+            "confidence": 0.86
+          }
+        ]
+      }
+    ],
+    "task": "Draft the recommendation for next week's pricing work.",
+    "expected": {
+      "should_include": ["seat-based packaging", "unresolved"],
+      "should_not_include": ["launch usage-based pricing"],
+      "rubric": [
+        {
+          "id": "keeps_review_boundary",
+          "requires_any": ["needs review", "not accepted"],
+          "forbids": ["launch usage-based pricing"]
+        },
+        {
+          "id": "uses_accepted_direction",
+          "requires_any": ["seat-based packaging"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "product_onboarding_002",
+    "category": "product_decision_constraints",
+    "title": "遵守不增加新表单字段的体验约束",
+    "project_brief": "Nimbus is improving onboarding conversion. The next answer should recommend a UX experiment.",
+    "evidence": [
+      {
+        "summary": "The onboarding team agreed not to add new required form fields during the conversion recovery sprint.",
+        "memory": "Do not add new required form fields during the conversion recovery sprint.",
+        "state_items": [
+          {
+            "id": "no-new-required-fields",
+            "kind": "active_constraint",
+            "statement": "Do not add new required onboarding form fields during the conversion recovery sprint.",
+            "priority": "high",
+            "confidence": 0.91
+          }
+        ]
+      },
+      {
+        "summary": "Copy changes and progressive disclosure are allowed experiments.",
+        "memory": "Copy changes and progressive disclosure are allowed.",
+        "state_items": [
+          {
+            "id": "copy-progressive-ok",
+            "kind": "accepted_belief",
+            "statement": "Copy changes and progressive disclosure are allowed onboarding experiments.",
+            "priority": "medium",
+            "confidence": 0.82
+          }
+        ]
+      }
+    ],
+    "task": "What onboarding experiment should we run next?",
+    "expected": {
+      "should_include": ["progressive disclosure", "required form fields"],
+      "should_not_include": ["add new required form fields"],
+      "rubric": [
+        {
+          "id": "respects_form_constraint",
+          "requires_any": ["required form fields"],
+          "forbids": ["add new required form fields"]
+        },
+        {
+          "id": "suggests_allowed_ux_change",
+          "requires_any": ["progressive disclosure", "copy changes"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "product_enterprise_003",
+    "category": "product_decision_constraints",
+    "title": "保持企业版范围收缩决策",
+    "project_brief": "Nimbus Enterprise launch is scope-sensitive. The next answer should avoid scope creep.",
+    "evidence": [
+      {
+        "summary": "The accepted launch decision is to ship SSO and audit export, but defer custom roles.",
+        "memory": "Enterprise launch includes SSO and audit export; custom roles are deferred.",
+        "state_items": [
+          {
+            "id": "enterprise-launch-scope",
+            "kind": "accepted_belief",
+            "statement": "Enterprise launch scope is SSO plus audit export; custom roles are deferred.",
+            "priority": "high",
+            "confidence": 0.88
+          }
+        ]
+      },
+      {
+        "summary": "Custom roles were deferred because implementation risk exceeded the launch window.",
+        "memory": "Custom roles were deferred due to launch risk.",
+        "state_items": [
+          {
+            "id": "custom-roles-deferred",
+            "kind": "rejected_direction",
+            "statement": "Do not recommend custom roles for the first Enterprise launch; they were deferred due to launch risk.",
+            "priority": "high",
+            "confidence": 0.87
+          }
+        ]
+      }
+    ],
+    "task": "What should be included in the first Enterprise launch plan?",
+    "expected": {
+      "should_include": ["SSO", "audit export"],
+      "should_not_include": ["include custom roles", "custom roles in the first"],
+      "rubric": [
+        {
+          "id": "keeps_launch_scope",
+          "requires_any": ["SSO", "audit export"],
+          "forbids": []
+        },
+        {
+          "id": "avoids_deferred_feature",
+          "requires_any": ["deferred"],
+          "forbids": ["include custom roles", "custom roles in the first"]
+        }
+      ]
+    }
+  },
+  {
+    "id": "stale_cache_001",
+    "category": "stale_or_conflicting_memory",
+    "title": "新证据覆盖过期缓存结论",
+    "project_brief": "Project Atlas had a cache incident. The next answer should use the newest accepted state.",
+    "evidence": [
+      {
+        "summary": "Earlier, the team suspected Redis TTL was the main cause of stale reads.",
+        "memory": "Redis TTL was suspected as the stale-read cause.",
+        "state_items": [
+          {
+            "id": "redis-ttl-suspicion",
+            "kind": "tentative_observation",
+            "statement": "Redis TTL was only an early suspicion for stale reads.",
+            "status": "tentative",
+            "priority": "low",
+            "confidence": 0.45,
+            "ttl_turns": 2
+          }
+        ]
+      },
+      {
+        "summary": "Later investigation confirmed stale reads came from missing tenant id in cache keys, not Redis TTL.",
+        "memory": "Confirmed cause: cache keys missed tenant id, not Redis TTL.",
+        "state_items": [
+          {
+            "id": "cache-key-tenant-id-cause",
+            "kind": "accepted_belief",
+            "statement": "The confirmed stale-read cause is missing tenant id in cache keys, not Redis TTL.",
+            "priority": "high",
+            "confidence": 0.93
+          }
+        ]
+      }
+    ],
+    "task": "What fix should we prioritize for the stale-read incident?",
+    "expected": {
+      "should_include": ["tenant id in cache keys"],
+      "should_not_include": ["Redis TTL"],
+      "rubric": [
+        {
+          "id": "uses_confirmed_cause",
+          "requires_any": ["tenant id in cache keys"],
+          "forbids": []
+        },
+        {
+          "id": "does_not_anchor_on_old_suspicion",
+          "requires_any": ["not Redis TTL", "confirmed"],
+          "forbids": ["prioritize Redis TTL"]
+        }
+      ]
+    }
+  },
+  {
+    "id": "stale_security_002",
+    "category": "stale_or_conflicting_memory",
+    "title": "隔离未确认的安全告警",
+    "project_brief": "Nimbus has a security triage workflow. The next answer should avoid treating unconfirmed alerts as facts.",
+    "evidence": [
+      {
+        "summary": "A scanner warning suggested token leakage, but it was marked needs review because the sample was from a test fixture.",
+        "memory": "Possible token leakage warning; may be a test fixture.",
+        "state_items": [
+          {
+            "id": "token-leakage-needs-review",
+            "kind": "open_question",
+            "statement": "Token leakage warning needs review because the sample may be a test fixture; do not treat it as confirmed.",
+            "status": "needs_review",
+            "priority": "high",
+            "confidence": 0.55
+          }
+        ]
+      },
+      {
+        "summary": "Confirmed action is to verify fixture provenance before changing secrets policy.",
+        "memory": "Verify fixture provenance before changing secrets policy.",
+        "state_items": [
+          {
+            "id": "verify-fixture-first",
+            "kind": "decision_gate",
+            "statement": "Verify fixture provenance before changing secrets policy.",
+            "priority": "high",
+            "confidence": 0.84
+          }
+        ]
+      }
+    ],
+    "task": "What should the security triage answer recommend?",
+    "expected": {
+      "should_include": ["verify", "provenance"],
+      "should_not_include": ["rotate all secrets"],
+      "rubric": [
+        {
+          "id": "keeps_uncertain_alert_bounded",
+          "requires_any": ["needs review", "not confirmed"],
+          "forbids": ["rotate all secrets"]
+        },
+        {
+          "id": "uses_decision_gate",
+          "requires_any": ["verify fixture provenance"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "stale_ops_003",
+    "category": "stale_or_conflicting_memory",
+    "title": "避免把临时绕过方案长期化",
+    "project_brief": "Atlas operations has a deployment reliability issue. The next answer should distinguish temporary workaround from permanent fix.",
+    "evidence": [
+      {
+        "summary": "Manual deploy approval was used as a temporary workaround during a broken canary detector.",
+        "memory": "Manual deploy approval was a temporary workaround for broken canary detection.",
+        "state_items": [
+          {
+            "id": "manual-approval-temporary",
+            "kind": "tentative_observation",
+            "statement": "Manual deploy approval was a temporary workaround, not the desired long-term release process.",
+            "status": "tentative",
+            "priority": "medium",
+            "confidence": 0.72,
+            "ttl_turns": 4
+          }
+        ]
+      },
+      {
+        "summary": "The accepted direction is to repair canary detection and then remove the manual approval workaround.",
+        "memory": "Repair canary detection and remove the manual approval workaround.",
+        "state_items": [
+          {
+            "id": "repair-canary-detection",
+            "kind": "accepted_belief",
+            "statement": "Repair canary detection and remove the manual deploy approval workaround after validation.",
+            "priority": "high",
+            "confidence": 0.89
+          }
+        ]
+      }
+    ],
+    "task": "What deployment reliability plan should we recommend?",
+    "expected": {
+      "should_include": ["repair canary detection", "remove the manual"],
+      "should_not_include": ["keep manual deploy approval as the long-term"],
+      "rubric": [
+        {
+          "id": "does_not_permanentize_workaround",
+          "requires_any": ["temporary workaround", "remove the manual"],
+          "forbids": ["keep manual deploy approval as the long-term"]
+        },
+        {
+          "id": "uses_accepted_fix",
+          "requires_any": ["repair canary detection"],
+          "forbids": []
+        }
+      ]
+    }
+  },
+  {
+    "id": "mixed_priority_001",
+    "category": "priority_and_projection",
+    "title": "高优先级约束应压过低优先级想法",
+    "project_brief": "Nimbus support automation is being scoped. The next answer should respect high-priority constraints.",
+    "evidence": [
+      {
+        "summary": "A low-priority idea proposed replacing the support inbox with a fully autonomous responder.",
+        "memory": "There was an idea to replace the support inbox with a fully autonomous responder.",
+        "state_items": [
+          {
+            "id": "autonomous-support-low-priority",
+            "kind": "working_hypothesis",
+            "statement": "Fully autonomous support response is only a low-priority idea and is not ready for recommendation.",
+            "priority": "low",
+            "confidence": 0.42
+          }
+        ]
+      },
+      {
+        "summary": "The high-priority constraint is that all external support replies need human review this quarter.",
+        "memory": "All external support replies need human review this quarter.",
+        "state_items": [
+          {
+            "id": "support-human-review-required",
+            "kind": "active_constraint",
+            "statement": "All external support replies require human review this quarter.",
+            "priority": "high",
+            "confidence": 0.94
+          }
+        ]
+      }
+    ],
+    "task": "What support automation scope should we recommend?",
+    "expected": {
+      "should_include": ["human review", "draft"],
+      "should_not_include": ["fully autonomous support response"],
+      "rubric": [
+        {
+          "id": "honors_high_priority_constraint",
+          "requires_any": ["human review"],
+          "forbids": ["fully autonomous support response"]
+        },
+        {
+          "id": "suggests_bounded_automation",
+          "requires_any": ["draft", "assist"],
+          "forbids": []
+        }
+      ]
+    }
+  }
+]

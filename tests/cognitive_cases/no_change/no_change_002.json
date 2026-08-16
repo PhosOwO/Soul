@@ -1,0 +1,23 @@
+{
+  "case_id": "no_change_002",
+  "scope": "Experiment Utilities",
+  "current_state": {
+    "entities": [],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Organize the PowerShell commands for running the category confusion matrix."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NO_CHANGE",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": false,
+    "expected_scope": "Experiment Utilities"
+  }
+}

@@ -1,0 +1,17 @@
+.brain/
+.pytest_cache/
+.pytest_tmp/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Historical experiment workspaces and raw generated outputs are local by default.
+experiments/
+
+# Keep SoulBench source and the human-readable latest scorecard, but skip bulky generated runs.
+benchmarks/**/results/**
+!benchmarks/soulbench_v0/results/
+!benchmarks/soulbench_v0/results/deepseek_latest_rescored/
+!benchmarks/soulbench_v0/results/deepseek_latest_rescored/ambench_scorecard.md

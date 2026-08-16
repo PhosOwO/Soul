@@ -1,0 +1,36 @@
+{
+  "case_id": "correction_001",
+  "scope": "Recall Optimization",
+  "current_state": {
+    "entities": [
+      {
+        "id": 30,
+        "type": "Problem",
+        "name": "Low recall caused by threshold setting",
+        "state": "accepted"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Correction: low recall is not mainly a threshold issue. Weak and short-duration events are being missed."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "ENTITY_UPDATED",
+    "should_create_candidate": false,
+    "should_create_entity": true,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Recall Optimization",
+    "target_entity": "Low recall caused by threshold setting",
+    "state_change": {
+      "state": "corrected",
+      "replacement": "Weak and short-duration MHW events are missed"
+    },
+    "operation": "correct"
+  }
+}

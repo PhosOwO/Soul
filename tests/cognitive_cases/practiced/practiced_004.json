@@ -1,0 +1,42 @@
+{
+  "case_id": "practiced_004",
+  "scope": "Architecture",
+  "current_state": {
+    "entities": [],
+    "candidates": [
+      {
+        "id": 4,
+        "type": "Idea",
+        "content": "Prefer modular monolith before microservices",
+        "status": "temp"
+      }
+    ]
+  },
+  "episode": [
+    {
+      "role": "assistant",
+      "content": "Documented the modular monolith plan in docs/architecture.md and kept microservices as a later option."
+    }
+  ],
+  "artifact_signals": [
+    {
+      "path": "docs/architecture.md",
+      "kind": "file"
+    }
+  ],
+  "expected": {
+    "diff_type": "CANDIDATE_PRACTICED",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Architecture",
+    "target_candidate_id": 4,
+    "artifact_paths": [
+      "docs/architecture.md"
+    ],
+    "state_change": {
+      "candidate_status": "proposed"
+    }
+  }
+}

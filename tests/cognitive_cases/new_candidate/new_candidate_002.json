@@ -1,0 +1,30 @@
+{
+  "case_id": "new_candidate_002",
+  "scope": "Recall Optimization",
+  "current_state": {
+    "entities": [
+      {
+        "type": "Problem",
+        "name": "Low MHW recall",
+        "state": "active"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Maybe add Focal Loss because MHW positive samples are too sparse and recall is much lower than precision."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NEW_CANDIDATE",
+    "should_create_candidate": true,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": true,
+    "expected_scope": "Recall Optimization",
+    "target_candidate": "Use Focal Loss for class imbalance"
+  }
+}

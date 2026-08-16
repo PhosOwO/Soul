@@ -1,0 +1,36 @@
+{
+  "case_id": "deferred_002",
+  "scope": "Architecture",
+  "current_state": {
+    "entities": [],
+    "candidates": [
+      {
+        "id": 21,
+        "type": "Idea",
+        "content": "Split Soul into microservices",
+        "status": "temp"
+      }
+    ]
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Put the microservices plan aside until scope routing is stable."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "ENTITY_UPDATED",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Architecture",
+    "target_candidate_id": 21,
+    "state_change": {
+      "candidate_status": "deferred",
+      "not_rejected": true
+    },
+    "operation": "defer"
+  }
+}

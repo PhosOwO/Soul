@@ -1,0 +1,36 @@
+{
+  "case_id": "state_change_001",
+  "scope": "Model Strategy",
+  "current_state": {
+    "entities": [
+      {
+        "id": 10,
+        "type": "Decision",
+        "name": "Do not change model architecture yet",
+        "state": "accepted"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Do not change the model for now. First verify input variables and loss; keep the ConvLSTM architecture."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "ENTITY_UPDATED",
+    "should_create_candidate": false,
+    "should_create_entity": true,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Model Strategy",
+    "target_entity": "Do not change model architecture yet",
+    "state_change": {
+      "state": "accepted",
+      "reason": "Defer architecture change"
+    },
+    "operation": "set_state"
+  }
+}

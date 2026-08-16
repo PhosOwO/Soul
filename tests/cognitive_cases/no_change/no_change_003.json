@@ -1,0 +1,29 @@
+{
+  "case_id": "no_change_003",
+  "scope": "Recall Optimization",
+  "current_state": {
+    "entities": [
+      {
+        "type": "Problem",
+        "name": "Low MHW recall",
+        "state": "active"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Recall is still low. Please inspect yesterday's training logs."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NO_CHANGE",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": false,
+    "expected_scope": "Recall Optimization"
+  }
+}

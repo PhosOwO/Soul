@@ -1,0 +1,42 @@
+{
+  "case_id": "practiced_003",
+  "scope": "Recall Optimization",
+  "current_state": {
+    "entities": [],
+    "candidates": [
+      {
+        "id": 3,
+        "type": "Idea",
+        "content": "Analyze false-negative MHW event characteristics",
+        "status": "temp"
+      }
+    ]
+  },
+  "episode": [
+    {
+      "role": "assistant",
+      "content": "Added analysis/false_negative_events.ipynb to measure missed event duration, intensity, and onset rate."
+    }
+  ],
+  "artifact_signals": [
+    {
+      "path": "analysis/false_negative_events.ipynb",
+      "kind": "code"
+    }
+  ],
+  "expected": {
+    "diff_type": "CANDIDATE_PRACTICED",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Recall Optimization",
+    "target_candidate_id": 3,
+    "artifact_paths": [
+      "analysis/false_negative_events.ipynb"
+    ],
+    "state_change": {
+      "candidate_status": "proposed"
+    }
+  }
+}

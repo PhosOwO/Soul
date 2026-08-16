@@ -1,0 +1,47 @@
+{
+  "case_id": "practiced_001",
+  "scope": "Input Variables",
+  "current_state": {
+    "entities": [],
+    "candidates": [
+      {
+        "id": 1,
+        "type": "Idea",
+        "content": "Add MLD as an input variable",
+        "status": "temp"
+      }
+    ]
+  },
+  "episode": [
+    {
+      "role": "assistant",
+      "content": "Implemented MLD in dataset.py and updated model.py input channels."
+    }
+  ],
+  "artifact_signals": [
+    {
+      "path": "dataset.py",
+      "kind": "code"
+    },
+    {
+      "path": "model.py",
+      "kind": "code"
+    }
+  ],
+  "expected": {
+    "diff_type": "CANDIDATE_PRACTICED",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": true,
+    "requires_user_confirmation": true,
+    "expected_scope": "Input Variables",
+    "target_candidate_id": 1,
+    "artifact_paths": [
+      "dataset.py",
+      "model.py"
+    ],
+    "state_change": {
+      "candidate_status": "proposed"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "case_id": "new_candidate_005",
+  "scope": "Loss Design",
+  "current_state": {
+    "entities": [],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Might need an event-level loss, because pointwise SST accuracy does not capture MHW onset and duration."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NEW_CANDIDATE",
+    "should_create_candidate": true,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": true,
+    "expected_scope": "Loss Design",
+    "target_candidate": "Event-level loss for onset and duration"
+  }
+}

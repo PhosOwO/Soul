@@ -1,0 +1,23 @@
+{
+  "case_id": "no_change_008",
+  "scope": "Codex Adapter",
+  "current_state": {
+    "entities": [],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Show the latest 20 messages from session.jsonl."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NO_CHANGE",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": false,
+    "expected_scope": "Codex Adapter"
+  }
+}

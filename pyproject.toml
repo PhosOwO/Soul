@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soul-core"
+version = "0.1.0"
+description = "Soul MVP: a project cognitive continuity layer for AI agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+soul = "soul.cli:main"
+soul-api = "soul.api:main"
+soul-mcp = "soul.mcp:main"
+
+[tool.setuptools.packages.find]
+include = ["soul*"]
+
+[tool.setuptools.package-data]
+soul = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

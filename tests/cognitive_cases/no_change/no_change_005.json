@@ -1,0 +1,29 @@
+{
+  "case_id": "no_change_005",
+  "scope": "Architecture",
+  "current_state": {
+    "entities": [
+      {
+        "type": "Decision",
+        "name": "Modular monolith first",
+        "state": "accepted"
+      }
+    ],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "Based on the microservices vs modular monolith conclusion, draw a module boundary diagram."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NO_CHANGE",
+    "should_create_candidate": false,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": false,
+    "expected_scope": "Architecture"
+  }
+}

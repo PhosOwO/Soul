@@ -1,0 +1,67 @@
+﻿{
+  "version": 3,
+  "rules": [
+    {
+      "type": "Idea",
+      "markers": [
+        "should consider",
+        "consider adding",
+        "maybe add",
+        "we should",
+        "we should consider",
+        "should examine",
+        "should start",
+        "we may need",
+        "might need",
+        "is missing",
+        "是不是应该",
+        "是否应该",
+        "应该考虑",
+        "考虑加入",
+        "可能缺少"
+      ]
+    },
+    {
+      "type": "Decision",
+      "markers": [
+        "we decided",
+        "decision:",
+        "from now on",
+        "treat as",
+        "the consensus is",
+        "我们决定",
+        "共识是",
+        "之后都",
+        "从现在开始",
+        "视为"
+      ]
+    },
+    {
+      "type": "Constraint",
+      "markers": [
+        "must not",
+        "should not",
+        "never",
+        "boundary is",
+        "boundaries are",
+        "constraint",
+        "不能",
+        "不要",
+        "边界",
+        "约束"
+      ]
+    },
+    {
+      "type": "Problem",
+      "markers": [
+        "root problem",
+        "current assumption is wrong",
+        "failure mode",
+        "真正问题",
+        "根本问题",
+        "失败模式",
+        "当前假设不对"
+      ]
+    }
+  ]
+}

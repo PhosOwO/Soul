@@ -1,0 +1,24 @@
+{
+  "case_id": "new_candidate_006",
+  "scope": "Explainability",
+  "current_state": {
+    "entities": [],
+    "candidates": []
+  },
+  "episode": [
+    {
+      "role": "user",
+      "content": "We should add SHAP or attention analysis to explain why the model misses weak short-duration MHW events."
+    }
+  ],
+  "artifact_signals": [],
+  "expected": {
+    "diff_type": "NEW_CANDIDATE",
+    "should_create_candidate": true,
+    "should_create_entity": false,
+    "should_create_event": false,
+    "requires_user_confirmation": true,
+    "expected_scope": "Explainability",
+    "target_candidate": "Explain missed weak short-duration events"
+  }
+}
