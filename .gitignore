@@ -1,17 +1,40 @@
+# Runtime state and local memory
 .brain/
+.soul/
+.reme_dsh/
+.reme_spike_v0_1/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
 .pytest_tmp/
 .mypy_cache/
 .ruff_cache/
-__pycache__/
-*.py[cod]
-*.egg-info/
+.venv/
+dist/
+build/
+.coverage
+htmlcov/
 
-# Historical experiment workspaces and raw generated outputs are local by default.
+# Node
+node_modules/
+npm-debug.log*
+
+# Local environment, editor, and OS files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local experiment and integration workspaces
 experiments/
+integrations/
+docs/
 
-# Keep SoulBench source and the human-readable latest scorecard, but skip bulky generated runs.
+# Generated benchmark outputs
 benchmarks/**/results/**
-!benchmarks/soulbench_v0/results/
-!benchmarks/soulbench_v0/results/deepseek_latest_rescored/
-!benchmarks/soulbench_v0/results/deepseek_latest_rescored/ambench_scorecard.md

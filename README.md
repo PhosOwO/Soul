@@ -1,155 +1,41 @@
 # Soul
 
-Soul is a lightweight project memory layer for AI agents.
+Soul is a lightweight project memory and current-state layer for AI agents.
 
-Its core idea is simple:
-
-```text
-files as memory + current state snapshot = Soul
-```
-
-Soul is not a planner, executor, or chat-history summarizer. It keeps project memory inspectable, keeps current cognition small, and lets agents such as DeepSeek Harness or Codex use that state without stuffing every past conversation into context.
-
-## 1. Files As Memory
-
-Soul uses file-based memory because files are inspectable, portable, and easy to version, search, copy, delete, or review.
-
-That is why Soul uses ReMe for ordinary memory/evidence.
-
-ReMe writes agent episodes into a local workspace:
+It helps an agent keep project continuity without injecting full chat history into every turn.
 
 ```text
-.soul/reme/
-  daily/
-  session/
-  resource/
-  metadata/
+files as memory + compact current state = Soul
 ```
 
-The important point is that memory remains evidence. Soul does not copy the full memory body into state. It keeps references such as:
+## What It Does
 
-```text
-reme://daily/2026-08-16/example.md:11-21#chunk-id
-```
+Soul separates long memory from active cognition:
 
-If an agent needs more background, it can follow the reference and read the original ReMe evidence.
+- ReMe stores ordinary memory and evidence as inspectable local files.
+- Soul keeps a small accepted Current State snapshot.
+- Agents receive the projected state, plus references back to full evidence when needed.
 
-## 2. State Snapshot
+Soul is not a planner, executor, or chat-history summarizer. It is a local-first continuity layer for agents such as DeepSeek Harness and Codex.
 
-Long-term memory is too large to inject every turn, so Soul keeps a small Current State snapshot:
+## Current Status
 
-```text
-.soul/state/
-  state.json
-  patch_proposals.jsonl
-  soul.db
-```
+Soul is an experimental MVP.
 
-Current State is the accepted project cognition:
+- Python CLI/API/MCP entry points are available.
+- ReMe-backed memory is in active integration.
+- DeepSeek Harness support is experimental.
+- Public package publishing is not planned yet; the npm package currently provides local command wrappers only.
 
-- active constraints
-- working hypotheses
-- rejected directions
-- decision gates
-- open questions
+## Quick Start
 
-State changes are proposed as patches first. They are not automatically accepted.
-
-```text
-Evidence
-  -> State Patch Proposal
-  -> Review / Apply
-  -> New Current State
-```
-
-## 3. ReMe + State = Soul
-
-Soul combines the two layers:
-
-```text
-.soul/
-  reme/       ordinary memory and evidence
-  state/      compact Current State snapshot
-  traces/     readable links between ReMe evidence and State patches
-```
-
-The runtime loop is:
-
-```text
-before turn:
-  inject only Soul Current State
-
-after turn:
-  write episode to ReMe
-  search ReMe for evidence refs
-  propose a Soul State Patch with refs only
-```
-
-This keeps context small while preserving traceability back to full evidence.
-
-## 4. Use With Harness And Codex
-
-Soul currently exposes three command entry points:
-
-```text
-soul
-soul-api
-soul-mcp
-```
-
-DeepSeek Harness can use Soul through the local HTTP API:
-
-```bash
-soul-api --project-dir . --port 8765
-```
-
-Use the ReMe-backed memory mode in the dsh Soul context plugin:
-
-```yaml
-- id: soul-context
-  name: '@deepseek-ai/dsh-soul-context'
-  config:
-    baseUrl: http://127.0.0.1:8765
-    scope: project
-    stateLimit: 8
-    memoryMode: soul_reme
-    remeSearchLimit: 5
-```
-
-Codex can use Soul through the MCP server:
-
-```bash
-soul-mcp --project-dir .
-```
-
-The MCP tools are:
-
-- `get_projected_state`
-- `observe_evidence`
-- `propose_patch`
-- `apply_patch`
-
-## 5. Quick Start
-
-Install from this repository with Python:
+Install from this repository:
 
 ```bash
 pip install -e .
 ```
 
-Or install the local npm wrapper:
-
-```bash
-npm install -g .
-```
-
-The npm wrapper is thin: it launches the Python Soul package. If Python is not on `PATH`, set:
-
-```bash
-SOUL_PYTHON=/path/to/python
-```
-
-Initialize a project:
+Initialize Soul in a project:
 
 ```bash
 soul init
@@ -167,39 +53,148 @@ Get compact context for an agent:
 soul context
 ```
 
-Run the local API for DeepSeek Harness:
+Run the local HTTP API:
 
 ```bash
 soul-api --project-dir . --port 8765
 ```
 
-Run the MCP server for Codex:
+Run the MCP server:
 
 ```bash
 soul-mcp --project-dir .
 ```
 
-Run the ReMe integration dry-run:
+Optional local npm wrappers:
 
 ```bash
-python integrations/dsh_reme_v0_1/run_dryrun.py
+npm install -g .
 ```
 
-Expected runtime layout:
+If Python is not on `PATH`, set:
+
+```bash
+SOUL_PYTHON=/path/to/python
+```
+
+## Runtime Layout
+
+Soul writes runtime state into the target project:
 
 ```text
 .soul/
-  state/
-    state.json
-    patch_proposals.jsonl
-    soul.db
-  reme/
-    daily/
-    metadata/
-    session/
-    resource/
-  traces/
-    reme_state_trace.md
+  reme/       ordinary memory and evidence
+  state/      compact Current State snapshot
+  traces/     readable links between evidence and state patches
 ```
 
-Public `npm install soul` is not available yet. The current npm wrapper works for local/private installs; publishing to npm still requires confirming the package name and removing `private: true` from `package.json`.
+The state directory contains:
+
+```text
+.soul/state/
+  state.json
+  patch_proposals.jsonl
+  soul.db
+```
+
+These runtime files are local project memory and should normally stay out of Git.
+
+## How It Works
+
+Soul's loop is intentionally small:
+
+```text
+before turn:
+  inject only projected Current State
+
+after turn:
+  write episode evidence to ReMe
+  propose a Soul State Patch with evidence references
+  review/apply accepted patches into Current State
+```
+
+State stores typed project cognition:
+
+- active constraints
+- working hypotheses
+- rejected directions
+- decision gates
+- open questions
+
+Soul keeps references to memory instead of copying full evidence into state, for example:
+
+```text
+reme://daily/2026-08-16/example.md:11-21#chunk-id
+```
+
+## Integrations
+
+### ReMe
+
+ReMe is the file-memory substrate. Soul uses it for ordinary memory and evidence, then stores only accepted state and evidence references in `.soul/state/`.
+
+### DeepSeek Harness
+
+DeepSeek Harness can use Soul through the local HTTP API:
+
+```bash
+soul-api --project-dir . --port 8765
+```
+
+Example context plugin configuration:
+
+```yaml
+- id: soul-context
+  name: '@deepseek-ai/dsh-soul-context'
+  config:
+    baseUrl: http://127.0.0.1:8765
+    scope: project
+    stateLimit: 8
+    memoryMode: soul_reme
+    remeSearchLimit: 5
+```
+
+### Codex
+
+Codex can use Soul through the MCP server:
+
+```bash
+soul-mcp --project-dir .
+```
+
+MCP tools:
+
+- `get_projected_state`
+- `observe_evidence`
+- `propose_patch`
+- `apply_patch`
+
+## Benchmarks
+
+SoulBench v0 is a small AMBench-style benchmark for comparing:
+
+- `baseline`: current task only
+- `memory_summary`: current task plus natural-language memory summary
+- `soul`: current task plus projected Current State
+
+Run the deterministic local benchmark:
+
+```bash
+python benchmarks/soulbench_v0/run_soulbench.py
+```
+
+Read the latest public scorecard:
+
+```text
+benchmarks/soulbench_v0/SCORECARD.md
+```
+
+Generated benchmark outputs stay local under `benchmarks/**/results/`.
+
+## Roadmap
+
+- Harden the ReMe-backed memory loop.
+- Reduce projected-state token cost.
+- Publish clean integration examples.
+- Add clearer state patch review workflows.
+- Keep package publishing disabled until package naming and license are decided.

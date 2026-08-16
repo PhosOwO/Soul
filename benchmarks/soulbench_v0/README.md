@@ -41,6 +41,12 @@ python benchmarks\soulbench_v0\run_soulbench.py --rescore-from benchmarks\soulbe
 benchmarks/soulbench_v0/results/latest/
 ```
 
+`results/` 下的原始运行结果是本地生成物，默认不提交。公开的人读结果摘要放在：
+
+```text
+benchmarks/soulbench_v0/SCORECARD.md
+```
+
 主要文件：
 
 - `run_metadata.json`：运行时间、后端、任务数量、整体指标。
