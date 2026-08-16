@@ -5,13 +5,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-DEFAULT_SOUL_DIR = ".brain"
+DEFAULT_SOUL_DIR = ".soul"
+DEFAULT_STATE_DIR = "state"
 DEFAULT_DB_NAME = "soul.db"
 
 
 def default_db_path(project_dir: Path | None = None) -> Path:
     root = project_dir or Path.cwd()
-    return root / DEFAULT_SOUL_DIR / DEFAULT_DB_NAME
+    return root / DEFAULT_SOUL_DIR / DEFAULT_STATE_DIR / DEFAULT_DB_NAME
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:

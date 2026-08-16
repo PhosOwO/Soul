@@ -41,7 +41,7 @@ def test_state_patch_requires_explicit_apply(tmp_path: Path) -> None:
 
 
 def test_agent_adapter_after_task_records_episode_and_patch_only(tmp_path: Path) -> None:
-    db_path = tmp_path / ".brain" / "soul.db"
+    db_path = tmp_path / ".soul" / "state" / "soul.db"
     with connect(db_path) as conn:
         init_database(conn, project_name="Test Project")
         adapter = SoulAgentAdapter(conn, project_dir=tmp_path)

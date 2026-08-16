@@ -16,6 +16,9 @@ export type SoulHarnessOptions = {
   baseUrl?: string;
   scope?: string;
   stateLimit?: number;
+  memoryMode?: "legacy" | "soul_reme" | "off";
+  remeWorkspaceDir?: string;
+  remeSearchLimit?: number;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:8765";
@@ -24,11 +27,17 @@ export class DeepSeekHarnessSoulPlugin {
   private readonly baseUrl: string;
   private readonly scope: string;
   private readonly stateLimit: number;
+  private readonly memoryMode: "legacy" | "soul_reme" | "off";
+  private readonly remeWorkspaceDir?: string;
+  private readonly remeSearchLimit: number;
 
   constructor(options: SoulHarnessOptions = {}) {
     this.baseUrl = (options.baseUrl ?? process.env.SOUL_API_URL ?? DEFAULT_BASE_URL).replace(/\/$/, "");
     this.scope = options.scope ?? process.env.SOUL_SCOPE ?? "project";
     this.stateLimit = options.stateLimit ?? 10;
+    this.memoryMode = options.memoryMode ?? parseMemoryMode(process.env.SOUL_DSH_MEMORY_MODE);
+    this.remeWorkspaceDir = options.remeWorkspaceDir ?? process.env.SOUL_REME_WORKSPACE_DIR;
+    this.remeSearchLimit = options.remeSearchLimit ?? Number(process.env.SOUL_REME_SEARCH_LIMIT ?? 5);
   }
 
   async beforeTurn(input: SoulHookInput, ctx: SoulHookContext = {}): Promise<Record<string, unknown>> {
@@ -50,11 +59,14 @@ export class DeepSeekHarnessSoulPlugin {
   }
 
   async afterTurn(input: SoulHookInput): Promise<Record<string, unknown>> {
+    if (this.memoryMode === "off") {
+      return { memoryMode: "off", skipped: true };
+    }
     const task = input.task ?? latestUserText(input.messages) ?? "";
     const outcome = input.outcome ?? latestAssistantText(input.messages) ?? "";
-    return postJson(`${this.baseUrl}/transition/propose`, {
+    const body = {
       evidence: {
-        source: "deepseek-harness",
+        source: this.memoryMode === "soul_reme" ? "deepseek-harness:reme" : "deepseek-harness",
         task,
         outcome,
         event_count: input.events?.length ?? 0,
@@ -64,7 +76,17 @@ export class DeepSeekHarnessSoulPlugin {
         outcome,
         events: input.events ?? [],
       },
-    });
+    };
+    if (this.memoryMode === "soul_reme") {
+      return postJson(`${this.baseUrl}/reme/transition/propose`, {
+        ...body,
+        reme: {
+          workspace_dir: this.remeWorkspaceDir,
+          search_limit: this.remeSearchLimit,
+        },
+      });
+    }
+    return postJson(`${this.baseUrl}/transition/propose`, body);
   }
 }
 
@@ -102,6 +124,13 @@ function latestRoleText(messages: SoulHookInput["messages"], role: string): stri
     .reverse()
     .find((item) => item.role === role);
   return message?.content ?? message?.text;
+}
+
+function parseMemoryMode(raw: string | undefined): "legacy" | "soul_reme" | "off" {
+  if (raw === "soul_reme" || raw === "off" || raw === "legacy") {
+    return raw;
+  }
+  return "legacy";
 }
 
 async function readJson(url: URL): Promise<Record<string, any>> {

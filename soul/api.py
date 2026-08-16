@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from soul.adapters.agent import SoulAgentAdapter
+from soul.adapters.reme import ReMeCliAdapter, reme_evidence_refs
 from soul.services.state import (
     apply_patch_proposal,
     append_patch_proposal,
@@ -61,6 +64,87 @@ class SoulApi:
                 },
             )
         return result
+
+    def propose_reme_transition(
+        self,
+        evidence: dict[str, Any] | None = None,
+        episode: dict[str, Any] | None = None,
+        reme: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        evidence_payload = dict(evidence or {})
+        episode_payload = episode or {}
+        reme_config = reme or {}
+        task = str(evidence_payload.get("task") or episode_payload.get("task") or "")
+        outcome = str(
+            evidence_payload.get("outcome")
+            or evidence_payload.get("summary")
+            or episode_payload.get("outcome")
+            or ""
+        )
+        fallback_session_id = "deepseek-harness-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        session_id = str(
+            evidence_payload.get("session_id")
+            or episode_payload.get("session_id")
+            or fallback_session_id
+        )
+
+        adapter = ReMeCliAdapter(
+            self.project_dir,
+            workspace_dir=resolve_reme_workspace(self.project_dir, reme_config.get("workspace_dir")),
+        )
+        note_name = safe_reme_note_name(f"dsh_{session_id}")
+        content = render_reme_episode(task=task, outcome=outcome, episode=episode_payload)
+        write_result = adapter.daily_write(
+            name=note_name,
+            description="DeepSeek Harness episode captured as ReMe memory",
+            session_id=safe_reme_session_id(session_id),
+            content=content,
+            date=str(reme_config.get("date") or ""),
+            metadata={
+                "source": "deepseek-harness",
+                "memory_owner": "reme",
+                "state_owner": "soul",
+                "memory_mode": "soul_reme",
+            },
+        )
+        search_query = " ".join(part for part in [task, outcome] if part).strip() or note_name
+        search_result = adapter.search(query=search_query, limit=int(reme_config.get("search_limit") or 5))
+        refs = reme_evidence_refs(search_result.metadata)
+        if not refs and write_result.metadata.get("path"):
+            refs = [{"type": "reme_file", "path": str(write_result.metadata["path"]).replace("\\", "/")}]
+
+        patch_evidence = {
+            "source": "deepseek-harness:reme",
+            "task": task,
+            "summary": compact_transition_summary(outcome),
+            "content": "ReMe evidence refs attached; ordinary memory body remains in ReMe.",
+            "memory_owner": "reme",
+            "state_owner": "soul",
+            "evidence_refs": refs,
+            "reme": {
+                "workspace_dir": str(adapter.workspace_dir),
+                "daily_path": write_result.metadata.get("path"),
+                "search_counts": search_result.metadata.get("counts", {}),
+            },
+        }
+        proposal = propose_patch(load_state(self.project_dir), patch_evidence, source="deepseek-harness:reme")
+        append_patch_proposal(proposal, self.project_dir)
+        trace_path = append_reme_state_trace(
+            self.project_dir,
+            task=task,
+            write_metadata=write_result.metadata,
+            search_metadata=search_result.metadata,
+            evidence_refs=refs,
+            proposal=proposal,
+        )
+        return {
+            "memory_mode": "soul_reme",
+            "reme_daily_write": write_result.metadata,
+            "reme_search": search_result.metadata,
+            "evidence_refs": refs,
+            "patch_proposal": proposal,
+            "trace_path": str(trace_path.relative_to(self.project_dir)).replace("\\", "/"),
+        }
 
     def propose_patch(self, evidence: dict[str, Any]) -> dict[str, Any]:
         proposal = propose_patch(load_state(self.project_dir), evidence, source=evidence.get("source", "soul-http-api"))
@@ -131,6 +215,15 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                         )
                     )
                     return
+                if self.path == "/reme/transition/propose":
+                    self.write_json(
+                        api.propose_reme_transition(
+                            evidence=payload.get("evidence"),
+                            episode=payload.get("episode"),
+                            reme=payload.get("reme"),
+                        )
+                    )
+                    return
                 if self.path == "/patch/propose":
                     self.write_json(api.propose_patch(payload.get("evidence", payload)))
                     return
@@ -168,6 +261,87 @@ def first_query_value(query: dict[str, list[str]], key: str, default: str) -> st
     return values[0] if values else default
 
 
+def resolve_reme_workspace(project_dir: Path, raw_workspace: Any) -> Path:
+    if not raw_workspace:
+        return project_dir / ".soul" / "reme"
+    path = Path(str(raw_workspace))
+    return path if path.is_absolute() else project_dir / path
+
+
+def render_reme_episode(task: str, outcome: str, episode: dict[str, Any]) -> str:
+    events = episode.get("events", [])
+    lines = [
+        "# DeepSeek Harness Episode",
+        "",
+        "## Task",
+        task or "No task text was provided.",
+        "",
+        "## Outcome",
+        outcome or "No outcome text was provided.",
+        "",
+        "## Event Summary",
+        f"- event_count: {len(events) if isinstance(events, list) else 0}",
+    ]
+    return "\n".join(lines)
+
+
+def safe_reme_note_name(raw: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw.strip())[:80].strip("_")
+    return name or "deepseek_harness_episode"
+
+
+def safe_reme_session_id(raw: str) -> str:
+    session_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", raw.strip())[:120].strip("-")
+    return session_id or "deepseek-harness"
+
+
+def compact_transition_summary(text: str, limit: int = 240) -> str:
+    summary = " ".join(text.split())
+    if not summary:
+        return "DeepSeek Harness episode was written to ReMe; review evidence refs for state changes."
+    if len(summary) <= limit:
+        return summary
+    return summary[: limit - 3].rstrip() + "..."
+
+
+def append_reme_state_trace(
+    project_dir: Path,
+    *,
+    task: str,
+    write_metadata: dict[str, Any],
+    search_metadata: dict[str, Any],
+    evidence_refs: list[dict[str, Any]],
+    proposal: dict[str, Any],
+) -> Path:
+    trace_path = project_dir / ".soul" / "traces" / "reme_state_trace.md"
+    trace_path.parent.mkdir(parents=True, exist_ok=True)
+    counts = search_metadata.get("counts", {})
+    lines = [
+        f"## {datetime.now(UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')}",
+        "",
+        f"- task: {compact_transition_summary(task, 160)}",
+        f"- reme_daily_path: {write_metadata.get('path', '')}",
+        f"- search_counts: vector={counts.get('vector', 0)}, keyword={counts.get('keyword', 0)}, returned={counts.get('returned', 0)}, hybrid={counts.get('hybrid', False)}",
+        f"- soul_patch_id: {proposal.get('id', '')}",
+        f"- soul_patch_status: {proposal.get('status', '')}",
+        f"- review_recommendation: {proposal.get('review_recommendation', '')}",
+        "- evidence_refs:",
+    ]
+    if evidence_refs:
+        for ref in evidence_refs:
+            line_range = ""
+            if ref.get("start_line") is not None and ref.get("end_line") is not None:
+                line_range = f":{ref['start_line']}-{ref['end_line']}"
+            chunk = f"#{ref['chunk_id']}" if ref.get("chunk_id") else ""
+            lines.append(f"  - reme://{ref.get('path', '')}{line_range}{chunk}")
+    else:
+        lines.append("  - none")
+    lines.append("")
+    with trace_path.open("a", encoding="utf-8") as file:
+        file.write("\n".join(lines))
+    return trace_path
+
+
 def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
     api = SoulApi(project_dir.resolve())
     server = ThreadingHTTPServer((host, port), make_handler(api))
@@ -177,7 +351,7 @@ def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal local Soul HTTP API.")
-    parser.add_argument("--project-dir", default=".", help="Soul project directory containing .brain/")
+    parser.add_argument("--project-dir", default=".", help="Soul project directory containing .soul/")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     return parser.parse_args()

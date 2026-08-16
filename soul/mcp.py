@@ -172,7 +172,7 @@ def serve_stdio(project_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal Soul MCP stdio server.")
-    parser.add_argument("--project-dir", default=".", help="Soul project directory containing .brain/")
+    parser.add_argument("--project-dir", default=".", help="Soul project directory containing .soul/")
     return parser.parse_args()
 
 

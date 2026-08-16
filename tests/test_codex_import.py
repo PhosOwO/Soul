@@ -86,7 +86,7 @@ def test_import_codex_session_persists_episode(tmp_path: Path) -> None:
         ],
     )
 
-    db_path = tmp_path / ".brain" / "soul.db"
+    db_path = tmp_path / ".soul" / "state" / "soul.db"
     with connect(db_path) as conn:
         init_database(conn, project_name="Test Project")
         episode_id = import_codex_session(conn, session_path)

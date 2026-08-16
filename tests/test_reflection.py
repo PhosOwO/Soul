@@ -109,7 +109,7 @@ def test_extract_diffs_keeps_lightweight_state_patch_proposals() -> None:
 
 
 def test_reflect_episode_records_no_change_as_system_event(tmp_path: Path) -> None:
-    db_path = tmp_path / ".brain" / "soul.db"
+    db_path = tmp_path / ".soul" / "state" / "soul.db"
     messages = [
         {
             "role": "user",
@@ -133,7 +133,7 @@ def test_reflect_episode_records_no_change_as_system_event(tmp_path: Path) -> No
 
 
 def test_reflect_episode_writes_patch_proposal(tmp_path: Path, monkeypatch) -> None:
-    db_path = tmp_path / ".brain" / "soul.db"
+    db_path = tmp_path / ".soul" / "state" / "soul.db"
     messages = [
         {
             "role": "user",

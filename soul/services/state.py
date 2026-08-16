@@ -32,7 +32,7 @@ class StatePaths:
 
 
 def brain_dir(project_dir: Path | None = None) -> Path:
-    return (project_dir or Path.cwd()) / ".brain"
+    return (project_dir or Path.cwd()) / ".soul" / "state"
 
 
 def state_paths(project_dir: Path | None = None) -> StatePaths:

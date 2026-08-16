@@ -248,7 +248,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soul", description="Soul Core command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = subparsers.add_parser("init", help="Initialize .brain/soul.db.")
+    init_parser = subparsers.add_parser("init", help="Initialize .soul/state/soul.db.")
     init_parser.add_argument("--project-name", default="Soul Project")
     init_parser.set_defaults(func=init_command)
 

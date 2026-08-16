@@ -1,0 +1,25 @@
+{
+  "name": "soul",
+  "version": "0.1.0",
+  "description": "Soul Core command wrappers for project cognitive continuity.",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "soul": "bin/soul.js",
+    "soul-api": "bin/soul-api.js",
+    "soul-mcp": "bin/soul-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "soul/",
+    "README.md",
+    "pyproject.toml"
+  ],
+  "scripts": {
+    "smoke": "node bin/soul.js --help && node bin/soul-api.js --help && node bin/soul-mcp.js --help"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
