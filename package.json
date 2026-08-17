@@ -1,9 +1,9 @@
 {
-  "name": "soul",
+  "name": "@soulkit/soul",
   "version": "0.1.0",
   "description": "Soul Core command wrappers for project cognitive continuity.",
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "Apache-2.0",
+  "private": false,
   "type": "commonjs",
   "bin": {
     "soul": "bin/soul.js",
@@ -12,7 +12,11 @@
   },
   "files": [
     "bin/",
-    "soul/",
+    ".trae/",
+    "docs/",
+    "soul/**/*.py",
+    "soul/**/*.ts",
+    "soul/schemas/",
     "README.md",
     "pyproject.toml"
   ],

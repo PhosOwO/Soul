@@ -46,6 +46,7 @@ export class DeepSeekHarnessSoulPlugin {
     url.searchParams.set("task", task);
     url.searchParams.set("scope", this.scope);
     url.searchParams.set("limit", String(this.stateLimit));
+    url.searchParams.set("source", "deepseek-harness");
 
     const statePayload = await readJson(url);
     const injection = String(statePayload.injection ?? statePayload.context ?? "");

@@ -24,6 +24,7 @@ function runPythonModule(moduleName, argv) {
   const env = {
     ...process.env,
     PYTHONPATH: [root, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+    PYTHONDONTWRITEBYTECODE: process.env.PYTHONDONTWRITEBYTECODE || "1",
   };
 
   const attempts = [];

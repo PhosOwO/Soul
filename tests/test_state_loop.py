@@ -14,6 +14,8 @@ from soul.storage.database import connect, init_database
 
 def test_state_patch_requires_explicit_apply(tmp_path: Path) -> None:
     state = load_state(tmp_path, project_name="Test Project")
+    assert (tmp_path / ".soul" / "state" / "STATE.md").read_text(encoding="utf-8").startswith("Soul Current State")
+
     proposal = propose_patch(
         state,
         {
@@ -55,6 +57,7 @@ def test_agent_adapter_after_task_records_episode_and_patch_only(tmp_path: Path)
     state = load_state(tmp_path)
 
     assert "Soul Current State" in before["context"]
+    assert before["state_artifact"] == ".soul/state/STATE.md"
     assert episode is not None
     assert result["patch_proposal"]["status"] == "proposed"
     assert state["version"] == 1

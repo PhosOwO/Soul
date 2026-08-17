@@ -6,11 +6,11 @@ from typing import Any
 
 from soul.services.state import (
     append_patch_proposal,
-    format_state_context,
     load_state,
+    load_state_markdown,
     propose_patch,
 )
-from soul.storage.database import dumps_json, project_scope_id
+from soul.storage.database import dumps_json, project_scope_id, require_lastrowid
 
 
 class SoulAgentAdapter:
@@ -25,7 +25,8 @@ class SoulAgentAdapter:
         return {
             "task": task,
             "state": state,
-            "context": format_state_context(state, limit=limit, task=task),
+            "context": load_state_markdown(self.project_dir, limit=limit, task=task),
+            "state_artifact": ".soul/state/STATE.md",
         }
 
     def after_task(
@@ -57,13 +58,14 @@ class SoulAgentAdapter:
                 dumps_json({"adapter": "SoulAgentAdapter", "evidence": evidence_payload}),
             ),
         )
-        evidence_payload["episode_id"] = int(cursor.lastrowid)
+        episode_id = require_lastrowid(cursor)
+        evidence_payload["episode_id"] = episode_id
         state = load_state(self.project_dir)
-        proposal = propose_patch(state, evidence_payload, source=f"agent:episode:{cursor.lastrowid}")
+        proposal = propose_patch(state, evidence_payload, source=f"agent:episode:{episode_id}")
         append_patch_proposal(proposal, self.project_dir)
         self.conn.commit()
         return {
-            "episode_id": int(cursor.lastrowid),
+            "episode_id": episode_id,
             "evidence": evidence_payload,
             "patch_proposal": proposal,
         }

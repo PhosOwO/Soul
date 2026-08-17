@@ -35,6 +35,9 @@ Thumbs.db
 experiments/
 integrations/
 docs/
+!docs/
+docs/*
+!docs/soul-reme-integration.md
 
 # Generated benchmark outputs
 benchmarks/**/results/**

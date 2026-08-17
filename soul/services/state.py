@@ -12,6 +12,7 @@ from soul.storage.database import dumps_json
 
 
 DEFAULT_STATE_NAME = "state.json"
+DEFAULT_STATE_MARKDOWN_NAME = "STATE.md"
 DEFAULT_PATCH_LOG_NAME = "patch_proposals.jsonl"
 STATE_KIND_ORDER = {
     "active_constraint": 0,
@@ -28,6 +29,7 @@ PRIORITY_SCORE = {"high": 3, "medium": 2, "low": 1}
 @dataclass(frozen=True, slots=True)
 class StatePaths:
     state_path: Path
+    state_markdown_path: Path
     patch_log_path: Path
 
 
@@ -37,11 +39,17 @@ def brain_dir(project_dir: Path | None = None) -> Path:
 
 def state_paths(project_dir: Path | None = None) -> StatePaths:
     root = brain_dir(project_dir)
-    return StatePaths(root / DEFAULT_STATE_NAME, root / DEFAULT_PATCH_LOG_NAME)
+    return StatePaths(root / DEFAULT_STATE_NAME, root / DEFAULT_STATE_MARKDOWN_NAME, root / DEFAULT_PATCH_LOG_NAME)
 
 
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def int_value(value: Any, default: int = 0) -> int:
+    if value in (None, ""):
+        return default
+    return int(value)
 
 
 def initial_state(project_name: str = "Soul Project") -> dict[str, Any]:
@@ -117,6 +125,17 @@ def save_state(state: dict[str, Any], project_dir: Path | None = None) -> None:
     paths = state_paths(project_dir)
     paths.state_path.parent.mkdir(parents=True, exist_ok=True)
     paths.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    paths.state_markdown_path.write_text(format_state_context(state) + "\n", encoding="utf-8")
+
+
+def load_state_markdown(project_dir: Path | None = None, limit: int = 10, task: str = "") -> str:
+    state = load_state(project_dir)
+    context = format_state_context(state, limit=limit, task=task)
+    paths = state_paths(project_dir)
+    if not paths.state_markdown_path.exists() or not task:
+        paths.state_markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        paths.state_markdown_path.write_text(format_state_context(state) + "\n", encoding="utf-8")
+    return context
 
 
 def format_state_context(state: dict[str, Any], limit: int = 10, task: str = "") -> str:
@@ -179,7 +198,7 @@ def format_projected_state_context(state: dict[str, Any], task: str = "", limit:
 
 def project_state_items(state: dict[str, Any], task: str = "", limit: int = 10) -> list[dict[str, Any]]:
     items = list(state.get("current_state", {}).get("state_items", []))
-    current_version = int(state.get("version", 0))
+    current_version = int_value(state.get("version"), 0)
     active = [item for item in items if is_state_item_active(item, current_version)]
     active.sort(key=lambda item: projection_sort_key(item, task))
     return active[:limit]
@@ -406,7 +425,7 @@ def apply_patch_proposal(
     questions = current.setdefault("open_questions", [])
     state_items = current.setdefault("state_items", [])
     now = utc_now()
-    next_version = int(new_state.get("version", 0)) + 1
+    next_version = int_value(new_state.get("version"), 0) + 1
 
     for operation in proposal.get("operations", []):
         op = operation.get("op")
@@ -415,7 +434,7 @@ def apply_patch_proposal(
             value["updated_at"] = now
             existing = next((belief for belief in beliefs if belief.get("id") == value["id"]), None)
             if existing:
-                value["evidence_count"] = int(existing.get("evidence_count", 0)) + 1
+                value["evidence_count"] = int_value(existing.get("evidence_count"), 0) + 1
                 existing.update(value)
             else:
                 beliefs.append(value)
@@ -434,7 +453,7 @@ def apply_patch_proposal(
             value.setdefault("created_version", next_version)
             existing = next((item for item in state_items if item.get("id") == value["id"]), None)
             if existing:
-                value["evidence_count"] = int(existing.get("evidence_count", 0)) + 1
+                value["evidence_count"] = int_value(existing.get("evidence_count"), 0) + 1
                 value.setdefault("created_at", existing.get("created_at", now))
                 value.setdefault("created_version", existing.get("created_version", next_version))
                 existing.update(value)

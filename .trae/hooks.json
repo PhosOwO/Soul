@@ -1,0 +1,30 @@
+{
+  "description": "Soul integration for TraeX",
+  "version": "1",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .trae/hooks/soul_user_prompt_submit.py",
+            "timeout": 10,
+            "statusMessage": "loading Soul Current State"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .trae/hooks/soul_stop.py",
+            "timeout": 30,
+            "statusMessage": "recording Soul evidence"
+          }
+        ]
+      }
+    ]
+  }
+}

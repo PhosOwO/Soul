@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "soul": {
+      "command": "node",
+      "args": ["node_modules/@soulkit/soul/bin/soul-mcp.js", "--project-dir", "."],
+      "enabled": true,
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 60
+    }
+  }
+}

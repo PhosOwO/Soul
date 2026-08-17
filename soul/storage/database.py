@@ -24,6 +24,12 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def require_lastrowid(cursor: sqlite3.Cursor) -> int:
+    if cursor.lastrowid is None:
+        raise RuntimeError("Expected SQLite cursor.lastrowid after INSERT, got None.")
+    return cursor.lastrowid
+
+
 def dumps_json(value: dict[str, Any] | list[Any] | None) -> str:
     return json.dumps(value or {}, ensure_ascii=False)
 
@@ -134,7 +140,7 @@ def init_database(conn: sqlite3.Connection, project_name: str = "Soul Project") 
             "INSERT INTO scopes (name, type, data_json) VALUES (?, 'project', ?)",
             (project_name, dumps_json({"initialized_by": "soul init"})),
         )
-        scope_id = cursor.lastrowid
+        scope_id = require_lastrowid(cursor)
         entity_cursor = conn.execute(
             """
             INSERT INTO entities (scope_id, type, name, state, data_json)
@@ -147,7 +153,7 @@ def init_database(conn: sqlite3.Connection, project_name: str = "Soul Project") 
             INSERT INTO cognitive_events (entity_id, type, change_json, reason, source)
             VALUES (?, 'project_initialized', ?, 'Soul project initialized', 'soul init')
             """,
-            (entity_cursor.lastrowid, dumps_json({"state": "initialized"})),
+            (require_lastrowid(entity_cursor), dumps_json({"state": "initialized"})),
         )
     migrate_legacy_events(conn)
     clean_obvious_task_cognition(conn)

@@ -1,14 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 from soul.services.reflection import extract_cognitive_diffs, load_reflection_policy, load_reflection_rules, reflect_episode
 from soul.services.state import load_patch_proposals
-from soul.storage.database import connect, dumps_json, init_database
+from soul.storage.database import connect, dumps_json, init_database, require_lastrowid
 
 
 def cli_env() -> dict[str, str]:
@@ -51,8 +52,14 @@ def write_session(path: Path, text: str) -> None:
     )
 
 
-def insert_episode(conn, messages: list[dict[str, str]], summary: str = "episode") -> int:
-    scope_id = conn.execute("SELECT id FROM scopes ORDER BY id LIMIT 1").fetchone()["id"]
+def require_row(row: sqlite3.Row | None) -> sqlite3.Row:
+    assert row is not None
+    return row
+
+
+def insert_episode(conn: sqlite3.Connection, messages: list[dict[str, str]], summary: str = "episode") -> int:
+    scope_row = require_row(conn.execute("SELECT id FROM scopes ORDER BY id LIMIT 1").fetchone())
+    scope_id = scope_row["id"]
     cursor = conn.execute(
         """
         INSERT INTO episodes (scope_id, source, summary, content_json, metadata_json)
@@ -61,7 +68,7 @@ def insert_episode(conn, messages: list[dict[str, str]], summary: str = "episode
         (scope_id, summary, dumps_json(messages), dumps_json({})),
     )
     conn.commit()
-    return int(cursor.lastrowid)
+    return require_lastrowid(cursor)
 
 
 def test_load_reflection_rules_are_state_patch_signals() -> None:
@@ -129,7 +136,7 @@ def test_reflect_episode_records_no_change_as_system_event(tmp_path: Path) -> No
     assert proposal_ids == []
     assert cognitive_event is None
     assert system_event is not None
-    assert "NO_CHANGE" in system_event["data_json"]
+    assert "NO_CHANGE" in require_row(system_event)["data_json"]
 
 
 def test_reflect_episode_writes_patch_proposal(tmp_path: Path, monkeypatch) -> None:

@@ -180,9 +180,11 @@ def load_reflection_rules(resource_name: str = DEFAULT_RULES_RESOURCE) -> list[R
 def load_reflection_policy(resource_name: str = DEFAULT_POLICY_RESOURCE) -> ReflectionPolicy:
     data = resources.files("soul.schemas").joinpath(resource_name).read_text(encoding="utf-8-sig")
     raw_policy = json.loads(data)
+    min_fragment_length = raw_policy.get("min_fragment_length", 8)
+    ignored_prefixes = raw_policy.get("ignored_prefixes", [])
     return ReflectionPolicy(
-        min_fragment_length=int(raw_policy.get("min_fragment_length", 8)),
-        ignored_prefixes=tuple(raw_policy.get("ignored_prefixes", [])),
+        min_fragment_length=int(min_fragment_length) if min_fragment_length is not None else 8,
+        ignored_prefixes=tuple(ignored_prefixes if isinstance(ignored_prefixes, list) else []),
     )
 
 
