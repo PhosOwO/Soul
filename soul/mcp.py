@@ -147,7 +147,8 @@ class SoulMcpServer:
     def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
         request_id = request.get("id")
         method = request.get("method")
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        raw_params = request.get("params")
+        params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
 
         try:
             if method == "notifications/initialized":

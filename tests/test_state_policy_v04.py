@@ -81,7 +81,7 @@ def test_policy_projection_prioritizes_constraints_and_gates() -> None:
     assert "temporary idea" not in context
 
 
-def test_unclassified_evidence_enters_needs_review_open_question() -> None:
+def test_unclassified_evidence_does_not_enter_state_projection() -> None:
     state = initial_state("Review Test")
     proposal = propose_patch(
         state,
@@ -94,7 +94,28 @@ def test_unclassified_evidence_enters_needs_review_open_question() -> None:
 
     state_item_ops = [operation for operation in proposal["operations"] if operation["op"] == "upsert_state_item"]
 
-    assert proposal["review_recommendation"] == "needs_review"
-    assert state_item_ops[0]["value"]["kind"] == "open_question"
-    assert state_item_ops[0]["value"]["status"] == "needs_review"
-    assert state_item_ops[0]["value"]["priority"] == "low"
+    assert proposal["review_recommendation"] == "reject"
+    assert proposal["knowledge_points"] == []
+    assert state_item_ops == []
+
+
+def test_durable_evidence_becomes_readable_knowledge_points() -> None:
+    state = initial_state("Review Test")
+    proposal = propose_patch(
+        state,
+        {
+            "source": "test",
+            "summary": (
+                "ERA5 accumulated-like heat flux files should be converted to W/m2 by dividing by 3600. "
+                "Created a temporary validation script."
+            ),
+        },
+    )
+
+    state_item_ops = [operation for operation in proposal["operations"] if operation["op"] == "upsert_state_item"]
+
+    assert proposal["title"]
+    assert proposal["why_remember"]
+    assert proposal["knowledge_points"][0]["statement"].startswith("ERA5 accumulated-like heat flux")
+    assert "Created a temporary validation script" not in proposal["knowledge_points"][0]["statement"]
+    assert state_item_ops[0]["value"]["kind"] == "active_constraint"

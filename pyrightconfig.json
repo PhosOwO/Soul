@@ -1,0 +1,4 @@
+{
+  "include": ["soul", "tests"],
+  "exclude": ["tests/test_state_loop_demo.py"]
+}

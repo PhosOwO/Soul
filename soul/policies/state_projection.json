@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "state_kind_order": [
+    "active_constraint",
+    "decision_gate",
+    "rejected_direction",
+    "working_hypothesis",
+    "tentative_observation",
+    "open_question",
+    "accepted_belief"
+  ],
+  "priority_score": {
+    "high": 3,
+    "medium": 2,
+    "low": 1
+  },
+  "durable_knowledge_keywords": [
+    "should",
+    "must",
+    "require",
+    "requires",
+    "required",
+    "constraint",
+    "convention",
+    "default",
+    "by default",
+    "do not",
+    "don't",
+    "avoid",
+    "not overwritten",
+    "workspace",
+    "path",
+    "suffix",
+    "output_suffix",
+    "naming",
+    "convert",
+    "converted",
+    "conversion",
+    "divide",
+    "dividing",
+    "optional",
+    "qnet"
+  ],
+  "episodic_prefixes": [
+    "created ",
+    "configured ",
+    "updated ",
+    "added ",
+    "ran ",
+    "tested ",
+    "verified ",
+    "fixed "
+  ],
+  "meta_review_phrases": [
+    "whether this evidence changes",
+    "whether it should change",
+    "should change accepted state",
+    "before becoming accepted state",
+    "before it changes accepted state",
+    "no classifier decided"
+  ],
+  "kind_rules": [
+    {
+      "kind": "active_constraint",
+      "keywords": ["should", "must", "require", "constraint", "do not", "don't", "avoid", "by default"]
+    },
+    {
+      "kind": "decision_gate",
+      "keywords": ["optional", "if ", "when ", "otherwise"]
+    }
+  ],
+  "high_priority_keywords": ["must", "do not", "don't", "avoid", "qnet", "workspace"],
+  "why_remember_rules": [
+    {
+      "keywords": ["convert", "divide", "qnet", "output", "suffix", "path", "workspace"],
+      "message": "This is a reusable project convention that affects future implementation choices."
+    },
+    {
+      "keywords": ["must", "require", "do not", "avoid", "default"],
+      "message": "This constraint should guide future agent behavior in this project."
+    }
+  ],
+  "default_why_remember": "This may be reusable project knowledge for future turns."
+}

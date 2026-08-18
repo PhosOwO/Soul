@@ -110,7 +110,9 @@ def test_extract_diffs_keeps_lightweight_state_patch_proposals() -> None:
 
     assert len(diffs) == 1
     assert diffs[0].diff_type == "STATE_PATCH_PROPOSAL"
+    assert diffs[0].content is not None
     assert "MLD" in diffs[0].content
+    assert diffs[0].evidence is not None
     assert diffs[0].evidence["criteria"] == "positive_state_patch_signal"
     assert diffs[0].requires_user_confirmation is True
 

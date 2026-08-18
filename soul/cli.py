@@ -18,13 +18,16 @@ from soul.services.reflection import reflect_episode
 from soul.services.state import (
     apply_patch_proposal,
     append_patch_proposal,
+    append_patch_status,
+    edit_patch_proposal,
     find_patch_proposal,
     format_state_context,
     load_state,
+    load_patch_proposals,
     propose_patch,
-    record_state_event,
     save_state,
 )
+from soul.services.text import compact_text
 from soul.storage.database import connect, default_db_path, init_database
 
 
@@ -79,8 +82,28 @@ def state_diff_command(args: argparse.Namespace) -> None:
     print(json.dumps(proposal, ensure_ascii=False, indent=2))
 
 
+def state_review_command(args: argparse.Namespace) -> None:
+    proposals = load_patch_proposals()
+    if args.proposal_id:
+        proposals = [proposal for proposal in proposals if proposal.get("id") == args.proposal_id]
+        if not proposals:
+            abort(f"Patch proposal not found: {args.proposal_id}")
+    else:
+        proposals = [proposal for proposal in proposals if proposal.get("status", "proposed") == "proposed"]
+    proposals = proposals[-args.limit :]
+    if not proposals:
+        print("No patch proposals to review.")
+        return
+    for index, proposal in enumerate(proposals):
+        if index:
+            print("")
+        print(format_patch_review(proposal, show_refs=args.refs))
+
+
 def state_apply_command(args: argparse.Namespace) -> None:
     proposal = find_patch_proposal(args.proposal_id)
+    if proposal.get("status") in {"rejected", "applied"}:
+        abort(f"Patch proposal {args.proposal_id} is already {proposal.get('status')}.")
     state = load_state()
     if proposal.get("base_version") != state.get("version"):
         abort(
@@ -88,8 +111,48 @@ def state_apply_command(args: argparse.Namespace) -> None:
         )
     next_state = apply_patch_proposal(state, proposal, confirmed_by=args.confirmed_by)
     save_state(next_state)
+    append_patch_status(proposal, "applied", updated_by=args.confirmed_by)
     print(f"Applied State Patch: {args.proposal_id}")
     print(f"New State version: {next_state['version']}")
+
+
+def state_reject_command(args: argparse.Namespace) -> None:
+    proposal = find_patch_proposal(args.proposal_id)
+    if proposal.get("status") in {"rejected", "applied"}:
+        abort(f"Patch proposal {args.proposal_id} is already {proposal.get('status')}.")
+    append_patch_status(proposal, "rejected", reason=args.reason or "", updated_by=args.rejected_by)
+    print(f"Rejected State Patch: {args.proposal_id}")
+
+
+def state_edit_command(args: argparse.Namespace) -> None:
+    proposal = find_patch_proposal(args.proposal_id)
+    knowledge_points = None
+    if args.json:
+        payload = json.loads(args.json)
+        if not isinstance(payload, list):
+            abort("--json must be a JSON array of knowledge point objects.")
+        knowledge_points = payload
+    elif args.knowledge_point:
+        knowledge_points = [
+            {
+                "statement": point,
+                "kind": args.kind,
+                "priority": args.priority,
+                "confidence": args.confidence,
+                "status": "accepted",
+                "why_remember": args.why_remember or "",
+            }
+            for point in args.knowledge_point
+        ]
+    edited = edit_patch_proposal(
+        proposal,
+        title=args.title,
+        why_remember=args.why_remember,
+        knowledge_points=knowledge_points,
+        updated_by=args.updated_by,
+    )
+    print(f"Edited State Patch: {edited['id']}")
+    print(format_patch_review(edited, show_refs=False))
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
@@ -635,6 +698,53 @@ def read_recent_jsonl(path: Path, *, limit: int) -> list[dict[str, object]]:
     return rows
 
 
+def format_patch_review(proposal: dict, *, show_refs: bool = False) -> str:
+    lines = [
+        f"Patch {proposal.get('id', 'unknown')}",
+        f"Title: {proposal.get('title') or compact_text(proposal.get('evidence', {}).get('summary', ''), 80)}",
+        f"Status: {proposal.get('status', 'proposed')}",
+        f"Recommendation: {proposal.get('review_recommendation', 'unknown')}",
+        "",
+        "Knowledge Points:",
+    ]
+    knowledge_points = proposal.get("knowledge_points")
+    if isinstance(knowledge_points, list) and knowledge_points:
+        for index, point in enumerate(knowledge_points, start=1):
+            if not isinstance(point, dict):
+                continue
+            lines.append(f"{index}. {point.get('statement', '')}")
+            meta = ", ".join(
+                part
+                for part in [
+                    str(point.get("kind", "")),
+                    f"priority={point.get('priority')}" if point.get("priority") else "",
+                    f"confidence={point.get('confidence')}" if point.get("confidence") is not None else "",
+                ]
+                if part
+            )
+            if meta:
+                lines.append(f"   {meta}")
+            if point.get("why_remember"):
+                lines.append(f"   Why remember: {point.get('why_remember')}")
+    else:
+        lines.append("- none detected")
+    if proposal.get("why_remember"):
+        lines.extend(["", f"Why remember: {proposal.get('why_remember')}"])
+    lines.extend(
+        [
+            "",
+            "Actions:",
+            f"- soul state apply {proposal.get('id', '')}",
+            f"- soul state reject {proposal.get('id', '')} --reason <reason>",
+            f"- soul state edit {proposal.get('id', '')} --knowledge-point <text>",
+        ]
+    )
+    if show_refs:
+        lines.extend(["", "Refs:"])
+        lines.append(json.dumps(proposal.get("refs") or {}, ensure_ascii=False, indent=2))
+    return "\n".join(lines)
+
+
 def newest_files(root: Path, *, limit: int, names: set[str] | None = None) -> list[Path]:
     if not root.exists():
         return []
@@ -758,6 +868,11 @@ def build_parser() -> argparse.ArgumentParser:
     state_show = state_subparsers.add_parser("show", help="Print Current State.")
     state_show.add_argument("--limit", type=int, default=10)
     state_show.set_defaults(func=state_show_command)
+    state_review = state_subparsers.add_parser("review", help="Review proposed knowledge before it enters Current State.")
+    state_review.add_argument("proposal_id", nargs="?")
+    state_review.add_argument("--limit", type=int, default=5)
+    state_review.add_argument("--refs", action="store_true", help="Show folded evidence refs and ReMe metadata.")
+    state_review.set_defaults(func=state_review_command)
     state_diff = state_subparsers.add_parser("diff", help="Create a State Patch proposal from evidence.")
     state_diff.add_argument("--summary", required=True)
     state_diff.add_argument("--content")
@@ -767,6 +882,22 @@ def build_parser() -> argparse.ArgumentParser:
     state_apply.add_argument("proposal_id")
     state_apply.add_argument("--confirmed-by", default="user")
     state_apply.set_defaults(func=state_apply_command)
+    state_reject = state_subparsers.add_parser("reject", help="Reject a State Patch proposal without changing Current State.")
+    state_reject.add_argument("proposal_id")
+    state_reject.add_argument("--reason")
+    state_reject.add_argument("--rejected-by", default="user")
+    state_reject.set_defaults(func=state_reject_command)
+    state_edit = state_subparsers.add_parser("edit", help="Edit a State Patch proposal's user-facing knowledge points.")
+    state_edit.add_argument("proposal_id")
+    state_edit.add_argument("--title")
+    state_edit.add_argument("--why-remember")
+    state_edit.add_argument("--knowledge-point", action="append")
+    state_edit.add_argument("--kind", default="accepted_belief")
+    state_edit.add_argument("--priority", default="medium")
+    state_edit.add_argument("--confidence", type=float, default=0.75)
+    state_edit.add_argument("--json", help="JSON array of knowledge point objects.")
+    state_edit.add_argument("--updated-by", default="user")
+    state_edit.set_defaults(func=state_edit_command)
 
     agent_parser = subparsers.add_parser("agent", help="Minimal Soul-Agent adapter.")
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command", required=True)

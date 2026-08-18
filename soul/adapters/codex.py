@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from soul.services.text import compact_text
+
 
 CONTEXT_PREFIXES = (
     "<recommended_plugins>",
@@ -121,14 +123,5 @@ def extract_user_message_text(content: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts).strip()
 
 
-def strip_context_blocks(text: str) -> str:
-    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
-    user_blocks = [block for block in blocks if not block.startswith(CONTEXT_PREFIXES)]
-    return "\n\n".join(user_blocks).strip()
 
 
-def compact_text(text: str, max_length: int) -> str:
-    one_line = " ".join(text.split())
-    if len(one_line) <= max_length:
-        return one_line
-    return one_line[: max_length - 3].rstrip() + "..."

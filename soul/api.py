@@ -18,9 +18,9 @@ from soul.services.state import (
     load_state_markdown,
     load_state,
     propose_patch,
-    record_state_event,
     save_state,
 )
+from soul.services.text import compact_summary
 from soul.services.integration_runs import append_integration_run
 from soul.storage.database import connect, default_db_path, init_database
 
@@ -577,12 +577,11 @@ def safe_reme_session_id(raw: str) -> str:
 
 
 def compact_transition_summary(text: str, limit: int = 240) -> str:
-    summary = " ".join(text.split())
-    if not summary:
-        return "Agent episode was written to ReMe; review evidence refs for state changes."
-    if len(summary) <= limit:
-        return summary
-    return summary[: limit - 3].rstrip() + "..."
+    return compact_summary(
+        text,
+        limit,
+        fallback="Agent episode was written to ReMe; review evidence refs for state changes.",
+    )
 
 
 def append_reme_state_trace(

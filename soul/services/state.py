@@ -1,31 +1,20 @@
 from __future__ import annotations
 
 import json
-import sqlite3
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from soul.storage.database import dumps_json
+from soul.services.state_policy import load_state_projection_policy
+from soul.services.text import compact_text
 
 
 DEFAULT_STATE_NAME = "state.json"
 DEFAULT_STATE_MARKDOWN_NAME = "STATE.md"
 DEFAULT_PATCH_LOG_NAME = "patch_proposals.jsonl"
-STATE_KIND_ORDER = {
-    "active_constraint": 0,
-    "decision_gate": 1,
-    "rejected_direction": 2,
-    "working_hypothesis": 3,
-    "tentative_observation": 4,
-    "open_question": 5,
-    "accepted_belief": 6,
-}
-PRIORITY_SCORE = {"high": 3, "medium": 2, "low": 1}
-
-
 @dataclass(frozen=True, slots=True)
 class StatePaths:
     state_path: Path
@@ -216,9 +205,10 @@ def is_state_item_active(item: dict[str, Any], current_version: int) -> bool:
 
 
 def projection_sort_key(item: dict[str, Any], task: str) -> tuple[int, int, int, str]:
+    policy = load_state_projection_policy()
     relevance = 1 if state_item_matches_task(item, task) else 0
-    priority = PRIORITY_SCORE.get(str(item.get("priority", "medium")), 2)
-    kind = STATE_KIND_ORDER.get(str(item.get("kind", "accepted_belief")), 99)
+    priority = policy.priority_rank(str(item.get("priority", "medium")))
+    kind = policy.kind_order(str(item.get("kind", "accepted_belief")))
     return (-priority, -relevance, kind, str(item.get("id", "")))
 
 
@@ -259,25 +249,22 @@ def propose_patch(
     source: str = "soul state diff",
 ) -> dict[str, Any]:
     text = " ".join(str(part) for part in [evidence.get("summary"), evidence.get("content")] if part)
+    knowledge_points = knowledge_points_from_evidence(evidence)
     operations = explicit_operations_from_evidence(evidence)
-    if not operations and text.strip():
-        operations.append(
-            add_state_item_operation(
-                "review-evidence-" + uuid4().hex[:8],
-                "open_question",
-                f"Review whether this evidence changes Soul state: {compact_text(text, 160)}",
-                evidence,
-                status="needs_review",
-                priority="low",
-                confidence=0.4,
-                ttl_turns=6,
-            )
-        )
+    if not operations:
+        operations = operations_from_knowledge_points(knowledge_points, evidence)
 
+    title = str(evidence.get("title") or proposal_title_from_evidence(evidence, knowledge_points))
+    why_remember = str(evidence.get("why_remember") or why_remember_from_evidence(evidence, knowledge_points))
+    refs = proposal_refs_from_evidence(evidence)
     return {
         "id": f"patch-{uuid4().hex[:12]}",
         "created_at": utc_now(),
         "status": "proposed",
+        "title": title,
+        "knowledge_points": knowledge_points,
+        "why_remember": why_remember,
+        "refs": refs,
         "source": source,
         "base_version": state.get("version", 0),
         "evidence": evidence,
@@ -286,10 +273,169 @@ def propose_patch(
     }
 
 
+def knowledge_points_from_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    explicit = evidence.get("knowledge_points")
+    if isinstance(explicit, list):
+        points = [normalize_knowledge_point(point, evidence) for point in explicit if isinstance(point, dict)]
+        return [point for point in points if point.get("statement")]
+
+    state_item = evidence.get("state_item")
+    state_items = evidence.get("state_items")
+    candidates: list[dict[str, Any]] = []
+    if isinstance(state_item, dict):
+        candidates.append(state_item)
+    if isinstance(state_items, list):
+        candidates.extend(item for item in state_items if isinstance(item, dict))
+    if candidates:
+        return [normalize_knowledge_point(item, evidence) for item in candidates]
+
+    text = str(evidence.get("summary") or evidence.get("content") or "")
+    points: list[dict[str, Any]] = []
+    for sentence in durable_sentences(text):
+        point = normalize_knowledge_point(
+            {
+                "statement": sentence,
+                "kind": infer_state_kind(sentence),
+                "status": "needs_review",
+                "priority": infer_priority(sentence),
+                "confidence": 0.55,
+                "why_remember": why_remember_for_statement(sentence),
+                "ttl_turns": 8,
+            },
+            evidence,
+        )
+        points.append(point)
+    return points
+
+
+def normalize_knowledge_point(point: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
+    statement = compact_text(str(point.get("statement") or point.get("value") or ""), 260)
+    if not statement:
+        return {}
+    return {
+        "id": str(point.get("id") or stable_state_item_id(statement)),
+        "kind": str(point.get("kind") or infer_state_kind(statement)),
+        "statement": statement,
+        "status": str(point.get("status") or "accepted"),
+        "priority": str(point.get("priority") or infer_priority(statement)),
+        "confidence": float(point.get("confidence", 0.75)),
+        "why_remember": compact_text(
+            str(point.get("why_remember") or evidence.get("why_remember") or why_remember_for_statement(statement)),
+            240,
+        ),
+        **({"ttl_turns": point["ttl_turns"]} if isinstance(point.get("ttl_turns"), int) else {}),
+    }
+
+
+def durable_sentences(text: str) -> list[str]:
+    normalized = " ".join(text.replace("\n", " ").split())
+    if not normalized:
+        return []
+    raw_sentences = [
+        sentence.strip(" -")
+        for sentence in re.split(r"(?<=[.!?。！？])\s+|;\s+|；\s+", normalized)
+        if sentence.strip(" -")
+    ]
+    durable: list[str] = []
+    policy = load_state_projection_policy()
+    for sentence in raw_sentences:
+        lowered = sentence.lower()
+        if policy.is_meta_review(lowered):
+            continue
+        if policy.is_episodic_prefix(lowered) and not contains_durable_signal(lowered):
+            continue
+        if contains_durable_signal(lowered):
+            durable.append(compact_text(sentence, 260))
+    return dedupe_preserve_order(durable)[:5]
+
+
+def contains_durable_signal(lowered_sentence: str) -> bool:
+    return load_state_projection_policy().contains_durable_signal(lowered_sentence)
+
+
+def dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        key = value.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def stable_state_item_id(statement: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", statement.lower()).strip("-")
+    if not slug:
+        slug = uuid4().hex[:8]
+    return "knowledge-" + slug[:48].strip("-")
+
+
+def infer_state_kind(statement: str) -> str:
+    return load_state_projection_policy().infer_kind(statement)
+
+
+def infer_priority(statement: str) -> str:
+    return load_state_projection_policy().infer_priority(statement)
+
+
+def why_remember_for_statement(statement: str) -> str:
+    return load_state_projection_policy().why_remember(statement)
+
+
+def proposal_title_from_evidence(evidence: dict[str, Any], knowledge_points: list[dict[str, Any]]) -> str:
+    if knowledge_points:
+        return compact_text(str(knowledge_points[0].get("statement", "State knowledge proposal")), 80)
+    task = str(evidence.get("task") or evidence.get("summary") or evidence.get("source") or "State knowledge proposal")
+    return compact_text(task, 80)
+
+
+def why_remember_from_evidence(evidence: dict[str, Any], knowledge_points: list[dict[str, Any]]) -> str:
+    if knowledge_points:
+        return "Review these reusable knowledge points before they enter Soul Current State."
+    if evidence.get("memory_owner") == "reme":
+        return "ReMe retained the evidence, but Soul did not find durable project knowledge to project into state."
+    return "No durable state knowledge was detected automatically."
+
+
+def proposal_refs_from_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    refs: dict[str, Any] = {}
+    if "evidence_refs" in evidence:
+        refs["evidence_refs"] = evidence.get("evidence_refs")
+    if "reme" in evidence:
+        refs["reme"] = evidence.get("reme")
+    raw_evidence = {
+        key: value
+        for key, value in evidence.items()
+        if key not in {"evidence_refs", "reme", "operations", "state_item", "state_items", "knowledge_points"}
+    }
+    if raw_evidence:
+        refs["raw_evidence"] = raw_evidence
+    return refs
+
+
+def operations_from_knowledge_points(knowledge_points: list[dict[str, Any]], evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        add_state_item_operation(
+            str(point["id"]),
+            str(point["kind"]),
+            str(point["statement"]),
+            evidence,
+            status=str(point.get("status", "accepted")),
+            priority=str(point.get("priority", "medium")),
+            confidence=float(point.get("confidence", 0.75)),
+            ttl_turns=point.get("ttl_turns") if isinstance(point.get("ttl_turns"), int) else None,
+            why_remember=str(point.get("why_remember", "")),
+        )
+        for point in knowledge_points
+        if point.get("statement")
+    ]
+
+
 def explicit_operations_from_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
-    operations = evidence.get("operations")
-    if isinstance(operations, list):
-        return [dict(operation) for operation in operations if isinstance(operation, dict)]
+    raw_operations = evidence.get("operations")
+    if isinstance(raw_operations, list):
+        return [dict(operation) for operation in raw_operations if isinstance(operation, dict)]
 
     state_item = evidence.get("state_item")
     state_items = evidence.get("state_items")
@@ -320,23 +466,8 @@ def state_item_operation_from_payload(item: dict[str, Any], evidence: dict[str, 
         priority=str(item.get("priority", "medium")),
         confidence=float(item.get("confidence", 0.75)),
         ttl_turns=item.get("ttl_turns") if isinstance(item.get("ttl_turns"), int) else None,
+        why_remember=str(item.get("why_remember") or evidence.get("why_remember") or ""),
     )
-
-
-def upsert_belief_operation(belief_id: str, statement: str, evidence: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "op": "upsert_belief",
-        "id": belief_id,
-        "value": {
-            "id": belief_id,
-            "statement": statement,
-            "status": "accepted",
-            "confidence": 0.9,
-            "evidence_count": 1,
-            "latest_evidence": evidence.get("summary") or evidence.get("source") or "manual evidence",
-        },
-        "evidence": evidence,
-    }
 
 
 def add_state_item_operation(
@@ -348,6 +479,7 @@ def add_state_item_operation(
     priority: str = "medium",
     confidence: float = 0.75,
     ttl_turns: int | None = None,
+    why_remember: str = "",
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "id": item_id,
@@ -359,6 +491,8 @@ def add_state_item_operation(
         "evidence_count": 1,
         "latest_evidence": evidence.get("summary") or evidence.get("source") or "manual evidence",
     }
+    if why_remember:
+        value["why_remember"] = why_remember
     if ttl_turns is not None:
         value["ttl_turns"] = ttl_turns
     return {"op": "upsert_state_item", "id": item_id, "value": value, "evidence": evidence}
@@ -382,10 +516,6 @@ def recommend_patch_review(operations: list[dict[str, Any]]) -> str:
     if any(kind in {"open_question", "tentative_observation"} for kind in kinds):
         return "needs_review"
     return "auto_accept"
-
-
-def add_constraint_operation(statement: str, evidence: dict[str, Any]) -> dict[str, Any]:
-    return {"op": "add_constraint", "value": statement, "evidence": evidence}
 
 
 def append_patch_proposal(proposal: dict[str, Any], project_dir: Path | None = None) -> None:
@@ -426,8 +556,9 @@ def apply_patch_proposal(
     state_items = current.setdefault("state_items", [])
     now = utc_now()
     next_version = int_value(new_state.get("version"), 0) + 1
+    operations = operations_for_apply(proposal)
 
-    for operation in proposal.get("operations", []):
+    for operation in operations:
         op = operation.get("op")
         if op == "upsert_belief":
             value = dict(operation["value"])
@@ -467,30 +598,66 @@ def apply_patch_proposal(
             "proposal_id": proposal.get("id"),
             "confirmed_by": confirmed_by,
             "applied_at": now,
-            "operations": proposal.get("operations", []),
+            "operations": operations,
         }
     )
     return new_state
 
 
-def record_state_event(
-    conn: sqlite3.Connection,
-    event_type: str,
+def operations_for_apply(proposal: dict[str, Any]) -> list[dict[str, Any]]:
+    knowledge_points = proposal.get("knowledge_points")
+    if isinstance(knowledge_points, list) and knowledge_points:
+        raw_evidence = proposal.get("evidence")
+        evidence: dict[str, Any] = raw_evidence if isinstance(raw_evidence, dict) else {}
+        return operations_from_knowledge_points(
+            [point for point in knowledge_points if isinstance(point, dict)],
+            evidence,
+        )
+    return [operation for operation in proposal.get("operations", []) if isinstance(operation, dict)]
+
+
+def append_patch_status(
     proposal: dict[str, Any],
-    source: str,
-    reason: str,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO cognitive_events (type, change_json, reason, source)
-        VALUES (?, ?, ?, ?)
-        """,
-        (event_type, dumps_json(proposal), reason, source),
-    )
+    status: str,
+    project_dir: Path | None = None,
+    *,
+    reason: str = "",
+    updated_by: str = "user",
+) -> dict[str, Any]:
+    record = json.loads(json.dumps(proposal, ensure_ascii=False))
+    record["status"] = status
+    record["updated_at"] = utc_now()
+    record["updated_by"] = updated_by
+    if reason:
+        record["status_reason"] = reason
+    append_patch_proposal(record, project_dir)
+    return record
 
 
-def compact_text(text: str, max_length: int) -> str:
-    one_line = " ".join(text.split())
-    if len(one_line) <= max_length:
-        return one_line
-    return one_line[: max_length - 3].rstrip() + "..."
+def edit_patch_proposal(
+    proposal: dict[str, Any],
+    project_dir: Path | None = None,
+    *,
+    title: str | None = None,
+    why_remember: str | None = None,
+    knowledge_points: list[dict[str, Any]] | None = None,
+    updated_by: str = "user",
+) -> dict[str, Any]:
+    edited = json.loads(json.dumps(proposal, ensure_ascii=False))
+    if title is not None:
+        edited["title"] = title
+    if why_remember is not None:
+        edited["why_remember"] = why_remember
+    if knowledge_points is not None:
+        evidence = edited.get("evidence") if isinstance(edited.get("evidence"), dict) else {}
+        edited["knowledge_points"] = [normalize_knowledge_point(point, evidence) for point in knowledge_points]
+        edited["operations"] = operations_from_knowledge_points(edited["knowledge_points"], evidence)
+        edited["review_recommendation"] = recommend_patch_review(edited["operations"])
+    edited["status"] = "proposed"
+    edited["updated_at"] = utc_now()
+    edited["updated_by"] = updated_by
+    edited["revision_of"] = proposal.get("id")
+    append_patch_proposal(edited, project_dir)
+    return edited
+
+

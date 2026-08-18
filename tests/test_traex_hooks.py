@@ -292,6 +292,104 @@ def test_reme_doctor_warns_when_workspace_files_are_at_project_root(tmp_path: Pa
     assert "found: daily" in completed.stdout
 
 
+def test_state_review_apply_reject_and_edit_are_user_readable(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "state",
+            "diff",
+            "--summary",
+            "ERA5 accumulated-like heat flux files should be converted to W/m2 by dividing by 3600.",
+        ],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    proposal = json.loads((project / ".soul" / "state" / "patch_proposals.jsonl").read_text(encoding="utf-8").splitlines()[0])
+
+    review = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "state", "review", proposal["id"]],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "Knowledge Points:" in review.stdout
+    assert "converted to W/m2" in review.stdout
+    assert "Refs:" not in review.stdout
+
+    apply = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "state", "apply", proposal["id"], "--confirmed-by", "test"],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "Applied State Patch" in apply.stdout
+    state_text = (project / ".soul" / "state" / "STATE.md").read_text(encoding="utf-8")
+    assert "converted to W/m2" in state_text
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "state",
+            "diff",
+            "--summary",
+            "Created a one-off script and printed temporary validation output.",
+        ],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    reject_id = json.loads((project / ".soul" / "state" / "patch_proposals.jsonl").read_text(encoding="utf-8").splitlines()[-1])["id"]
+    reject = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "state", "reject", reject_id, "--reason", "episodic"],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "Rejected State Patch" in reject.stdout
+    assert '"status": "rejected"' in (project / ".soul" / "state" / "patch_proposals.jsonl").read_text(encoding="utf-8")
+
+    edit = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "state",
+            "edit",
+            reject_id,
+            "--title",
+            "Manual project rule",
+            "--knowledge-point",
+            "Do not overwrite existing base preprocessing outputs by default.",
+            "--why-remember",
+            "This protects reusable project outputs.",
+        ],
+        cwd=project,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "Manual project rule" in edit.stdout
+    assert "Do not overwrite" in edit.stdout
+
+
 def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()

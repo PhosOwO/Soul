@@ -137,7 +137,8 @@ def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
     assert payload["reme_write_mode"] == "auto_memory"
     assert payload["evidence_refs"][0]["path"] == "daily/2026-08-17/codex_session.md"
     assert payload["patch_proposal"]["status"] == "proposed"
-    assert payload["patch_proposal"]["review_recommendation"] == "needs_review"
+    assert payload["patch_proposal"]["review_recommendation"] == "reject"
+    assert payload["patch_proposal"]["knowledge_points"] == []
     assert payload["patch_proposal"]["evidence"]["source"] == "test-mcp:reme"
     assert payload["patch_proposal"]["evidence"]["memory_owner"] == "reme"
     assert payload["patch_proposal"]["evidence"]["content"] == "ReMe evidence refs attached; ordinary memory body remains in ReMe."

@@ -16,12 +16,14 @@
     "docs/",
     "soul/**/*.py",
     "soul/**/*.ts",
+    "soul/policies/",
     "soul/schemas/",
     "README.md",
     "pyproject.toml"
   ],
   "scripts": {
-    "smoke": "node bin/soul.js --help && node bin/soul-api.js --help && node bin/soul-mcp.js --help"
+    "smoke": "node bin/soul.js --help && node bin/soul-api.js --help && node bin/soul-mcp.js --help",
+    "typecheck": "npx pyright"
   },
   "engines": {
     "node": ">=18"

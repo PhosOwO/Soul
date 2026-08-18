@@ -30,7 +30,9 @@ def test_soul_api_propose_transition_records_episode_and_patch(tmp_path):
 
     assert payload["episode_id"] > 0
     assert payload["patch_proposal"]["status"] == "proposed"
-    assert payload["patch_proposal"]["operations"]
+    assert "title" in payload["patch_proposal"]
+    assert "knowledge_points" in payload["patch_proposal"]
+    assert "why_remember" in payload["patch_proposal"]
 
 
 def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_path, monkeypatch):
