@@ -18,6 +18,7 @@ def run_hook(script: str, payload: dict[str, object]) -> dict[str, object]:
         [sys.executable, f".trae/hooks/{script}"],
         cwd=ROOT,
         input=json.dumps(payload),
+        env={**cli_env(), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"},
         text=True,
         capture_output=True,
         check=True,
@@ -30,6 +31,7 @@ def run_hook_from_cwd(cwd: Path, script: str, payload: dict[str, object]) -> dic
         [sys.executable, f".trae/hooks/{script}"],
         cwd=cwd,
         input=json.dumps(payload),
+        env={**cli_env(), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"},
         text=True,
         capture_output=True,
         check=True,
@@ -130,6 +132,10 @@ def test_traex_user_install_uses_trae_home_without_hardcoded_home(tmp_path: Path
     assert "[mcp_servers.soul]" in text
     assert "[[hooks.UserPromptSubmit.hooks]]" in text
     assert "[[hooks.Stop.hooks]]" in text
+    assert "bin/soul.js hook user-prompt-submit --host traex" in text
+    assert "bin/soul.js hook stop --host traex" in text
+    assert ".trae/hooks/soul_user_prompt_submit.py" not in text
+    assert ".trae/hooks/soul_stop.py" not in text
     assert str(project) in text
     assert (project / ".soul" / "state" / "state.json").is_file()
     assert (project / ".soul" / "state" / "STATE.md").is_file()
@@ -169,6 +175,7 @@ def test_traex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> 
     assert 'command = "custom"' in text
     assert text.count("[mcp_servers.soul]") == 1
     assert "[[hooks.UserPromptSubmit.hooks]]" in text
+    assert "bin/soul.js hook user-prompt-submit --host traex" in text
     assert "Skipped existing unmanaged entries" in completed.stdout
 
 
@@ -203,8 +210,8 @@ def test_traex_doctor_reports_recent_heartbeat_and_reme_files(tmp_path: Path) ->
                 "created_at": "2026-08-17T00:00:00+00:00",
                 "hook_event_name": "Stop",
                 "status": "success",
-                "recorded": True,
-                "patch_id": "patch-1",
+                "queued": True,
+                "job_id": "turn-1",
             }
         )
         + "\n",
@@ -225,7 +232,7 @@ def test_traex_doctor_reports_recent_heartbeat_and_reme_files(tmp_path: Path) ->
     )
 
     assert "hook heartbeat: present" in completed.stdout
-    assert "patch=patch-1" in completed.stdout
+    assert "Stop success" in completed.stdout
     assert "ReMe evidence: present" in completed.stdout
     assert "hooks executed recently" in completed.stdout
 
@@ -465,6 +472,8 @@ def test_traex_user_prompt_submit_hook_injects_soul_state() -> None:
 def test_traex_stop_hook_records_evidence_without_blocking() -> None:
     heartbeat = ROOT / ".soul" / "state" / "hook_runs.jsonl"
     before = heartbeat.read_text(encoding="utf-8").splitlines() if heartbeat.exists() else []
+    queue_path = ROOT / ".soul" / "state" / "queue" / "jobs.jsonl"
+    queue_before = queue_path.read_text(encoding="utf-8").splitlines() if queue_path.exists() else []
     session_id = "test-traex-session-heartbeat"
     output = run_hook(
         "soul_stop.py",
@@ -478,14 +487,54 @@ def test_traex_stop_hook_records_evidence_without_blocking() -> None:
     )
 
     assert "continue" not in output
-    assert "Soul proposed state patch" in str(output["systemMessage"])
+    assert "Soul queued evidence job" in str(output["systemMessage"])
     after = heartbeat.read_text(encoding="utf-8").splitlines()
     records = [json.loads(line) for line in after[len(before):]]
     record = next(record for record in records if record.get("session_id") == session_id)
     assert record["hook_event_name"] == "Stop"
     assert record["status"] == "success"
-    assert record["recorded"] is True
-    assert record["patch_id"]
+    assert record["queued"] is True
+    assert record["job_id"]
+    assert record["worker_started"] is False
+    queue_after = queue_path.read_text(encoding="utf-8").splitlines()
+    jobs = [json.loads(line) for line in queue_after[len(queue_before):]]
+    job = next(job for job in jobs if job.get("session_id") == session_id)
+    assert job["type"] == "turn_evidence"
+    assert job["payload"]["outcome"] == "This should become evidence."
+
+
+def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    env = {**cli_env(), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"}
+    payload = {
+        "cwd": str(project),
+        "prompt": "Capture a durable rule",
+        "last_assistant_message": "Use the shared hook runtime for host adapters.",
+        "session_id": "generic-hook-session",
+        "hook_event_name": "Stop",
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "hook", "stop", "--host", "codex"],
+        cwd=ROOT,
+        input=json.dumps(payload),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    output = json.loads(completed.stdout)
+    assert "Soul queued evidence job" in output["systemMessage"]
+    hook_runs = (project / ".soul" / "state" / "hook_runs.jsonl").read_text(encoding="utf-8").splitlines()
+    heartbeat = json.loads(hook_runs[-1])
+    assert heartbeat["host"] == "codex"
+    assert heartbeat["queued"] is True
+    jobs = (project / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
+    job = json.loads(jobs[-1])
+    assert job["source"] == "codex"
+    assert job["payload"]["outcome"] == "Use the shared hook runtime for host adapters."
 
 
 def test_traex_hooks_load_soul_from_npm_package_layout(tmp_path: Path) -> None:

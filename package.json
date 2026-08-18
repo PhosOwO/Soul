@@ -12,7 +12,9 @@
   },
   "files": [
     "bin/",
-    ".trae/",
+    ".trae/.mcp.json",
+    ".trae/hooks.json",
+    ".trae/hooks/*.py",
     "docs/",
     "soul/**/*.py",
     "soul/**/*.ts",

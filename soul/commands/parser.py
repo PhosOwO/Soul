@@ -8,9 +8,10 @@ import sys
 from urllib.error import URLError
 from urllib.request import urlopen
 from pathlib import Path
-from typing import Any, Mapping, NoReturn
+from typing import Any, Mapping, NoReturn, cast
 
 from soul.adapters.reme import ReMeCliAdapter
+from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
     PATCH_STATUS_ACCEPTED,
@@ -21,6 +22,7 @@ from soul.services.shared.constants import (
 from soul.services.integrations.integration_runs import append_integration_run, latest_matching_run, read_integration_runs
 from soul.services.integrations.codex_workflow import ingest_codex_session
 from soul.services.integrations.importer import import_codex_session
+from soul.services.integrations.queue import drain_queue, queue_status
 from soul.services.integrations.reflection import reflect_episode
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
 from soul.services.state_core.state_render import format_state_context
@@ -69,6 +71,50 @@ def status_command(_: argparse.Namespace) -> None:
 
 def context_command(args: argparse.Namespace) -> None:
     print(format_state_context(load_state(), limit=args.limit))
+
+
+def queue_status_command(args: argparse.Namespace) -> None:
+    summary = queue_status(Path(args.project_dir).resolve())
+    print("Soul Queue")
+    print(f"- queued: {summary.queued}")
+    print(f"- processing: {summary.started}")
+    print(f"- completed: {summary.completed}")
+    print(f"- failed retryable: {summary.failed_retryable}")
+    print(f"- blocked: {summary.blocked}")
+    print(f"- dead letter: {summary.dead_letter}")
+    if summary.last_completed:
+        patch = f" {summary.last_completed.get('patch_id')}" if summary.last_completed.get("patch_id") else ""
+        print(f"- last completed: {summary.last_completed.get('created_at', 'unknown')}{patch}")
+    else:
+        print("- last completed: none")
+    if summary.last_error:
+        print(f"- last error: {summary.last_error.get('error', 'unknown')}")
+    else:
+        print("- last error: none")
+
+
+def queue_drain_command(args: argparse.Namespace) -> None:
+    result = drain_queue(Path(args.project_dir).resolve(), limit=args.limit)
+    if result.get("locked"):
+        print("Soul queue worker is already running.")
+        return
+    processed = result.get("processed", [])
+    print(f"Processed queue jobs: {len(processed) if isinstance(processed, list) else 0}")
+    if isinstance(processed, list):
+        for item in processed:
+            if not isinstance(item, dict):
+                continue
+            detail = f" {item.get('patch_id')}" if item.get("patch_id") else ""
+            print(f"- {item.get('job_id', 'unknown')}: {item.get('status', 'unknown')}{detail}")
+
+
+def hook_user_prompt_submit_command(args: argparse.Namespace) -> None:
+    write_json(run_user_prompt_submit_hook(read_payload(), host=cast(HookHost, args.host)).output)
+
+
+def hook_stop_command(args: argparse.Namespace) -> None:
+    write_json(run_stop_hook(read_payload(), host=cast(HookHost, args.host)).output)
+
 
 def state_show_command(args: argparse.Namespace) -> None:
     print(format_state_context(load_state(), limit=args.limit))
@@ -434,6 +480,7 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
     reme_files = newest_files(project_dir / ".soul" / "reme", limit=3)
     trace_files = newest_files(project_dir / ".soul" / "traces", limit=3)
     patch_files = newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1)
+    queue = queue_status(project_dir)
 
     print("TraeX Soul doctor:")
     print(f"- project: {project_dir}")
@@ -446,12 +493,16 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
     print_file_summary("ReMe evidence", reme_files, project_dir)
     print_file_summary("Soul traces", trace_files, project_dir)
     print_file_summary("Patch proposals", patch_files, project_dir)
+    print_queue_summary(queue)
 
     if not hook_runs:
         print("- status: configured status is not enough; no recent Soul hook execution heartbeat was found.")
         print("- action: start a new TraeX turn in this project, then re-run `soul traex doctor --project-dir .`.")
     elif any(run.get("status") == "error" for run in hook_runs[:5]):
         print("- status: hooks executed, but recent errors were recorded.")
+    elif queue.queued or queue.failed_retryable:
+        print("- status: hooks executed; queued evidence is waiting for background processing.")
+        print("- action: run `soul queue drain --project-dir .` if it does not clear automatically.")
     else:
         print("- status: hooks executed recently.")
 
@@ -569,10 +620,8 @@ def build_codex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
 
 
 def build_traex_user_managed_block(*, project_dir: Path, package_root: Path) -> str:
-    python = command_path(os.environ.get("SOUL_PYTHON") or sys.executable or "python3")
     soul_mcp = package_root / "bin" / "soul-mcp.js"
-    prompt_hook = package_root / ".trae" / "hooks" / "soul_user_prompt_submit.py"
-    stop_hook = package_root / ".trae" / "hooks" / "soul_stop.py"
+    soul_cli = package_root / "bin" / "soul.js"
     return "\n".join(
         [
             MANAGED_TRAEX_BEGIN,
@@ -589,7 +638,7 @@ def build_traex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
             "",
             "[[hooks.UserPromptSubmit.hooks]]",
             'type = "command"',
-            f"command = {json.dumps(shell_command([python, command_path(prompt_hook)]))}",
+            f"command = {json.dumps(shell_command(['node', command_path(soul_cli), 'hook', 'user-prompt-submit', '--host', 'traex']))}",
             "timeout = 10",
             'statusMessage = "loading Soul Current State"',
             "",
@@ -597,7 +646,7 @@ def build_traex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
             "",
             "[[hooks.Stop.hooks]]",
             'type = "command"',
-            f"command = {json.dumps(shell_command([python, command_path(stop_hook)]))}",
+            f"command = {json.dumps(shell_command(['node', command_path(soul_cli), 'hook', 'stop', '--host', 'traex']))}",
             "timeout = 30",
             'statusMessage = "recording Soul evidence"',
             "",
@@ -780,6 +829,19 @@ def print_hook_summary(hook_runs: list[dict[str, object]]) -> None:
         print(f"  - {created}: {event} {status}{detail}")
 
 
+def print_queue_summary(summary: Any) -> None:
+    print(
+        "- queue: "
+        f"queued={summary.queued}, processing={summary.started}, completed={summary.completed}, "
+        f"failed_retryable={summary.failed_retryable}, blocked={summary.blocked}, dead_letter={summary.dead_letter}"
+    )
+    if summary.last_completed:
+        patch = f", patch={summary.last_completed.get('patch_id')}" if summary.last_completed.get("patch_id") else ""
+        print(f"  - last completed: {summary.last_completed.get('created_at', 'unknown')}{patch}")
+    if summary.last_error:
+        print(f"  - last error: {summary.last_error.get('error', 'unknown')}")
+
+
 def print_file_summary(label: str, files: list[Path], project_dir: Path) -> None:
     if not files:
         print(f"- {label}: none")
@@ -869,6 +931,26 @@ def build_parser() -> argparse.ArgumentParser:
     context_parser = subparsers.add_parser("context", help="Print compact context for Codex.")
     context_parser.add_argument("--limit", type=int, default=10)
     context_parser.set_defaults(func=context_command)
+
+    queue_parser = subparsers.add_parser("queue", help="Inspect and process asynchronous Soul evidence jobs.")
+    queue_subparsers = queue_parser.add_subparsers(dest="queue_command", required=True)
+    queue_status_parser = queue_subparsers.add_parser("status", help="Show queued evidence processing status.")
+    queue_status_parser.add_argument("--project-dir", default=".")
+    queue_status_parser.set_defaults(func=queue_status_command)
+    queue_drain = queue_subparsers.add_parser("drain", help="Process queued evidence jobs using FIFO over runnable jobs.")
+    queue_drain.add_argument("--project-dir", default=".")
+    queue_drain.add_argument("--limit", type=int, default=3)
+    queue_drain.set_defaults(func=queue_drain_command)
+
+    hook_parser = subparsers.add_parser("hook", help="Run reusable Soul hook adapters from stdin JSON.")
+    hook_subparsers = hook_parser.add_subparsers(dest="hook_command", required=True)
+    hook_hosts = ["traex", "codex", "dsh", "generic"]
+    hook_prompt = hook_subparsers.add_parser("user-prompt-submit", help="Inject Soul Current State for a before-turn hook.")
+    hook_prompt.add_argument("--host", choices=hook_hosts, default="generic")
+    hook_prompt.set_defaults(func=hook_user_prompt_submit_command)
+    hook_stop = hook_subparsers.add_parser("stop", help="Enqueue completed-turn evidence for background processing.")
+    hook_stop.add_argument("--host", choices=hook_hosts, default="generic")
+    hook_stop.set_defaults(func=hook_stop_command)
 
     state_parser = subparsers.add_parser("state", help="Inspect and update Current State.")
     state_subparsers = state_parser.add_subparsers(dest="state_command", required=True)
