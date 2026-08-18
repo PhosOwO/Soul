@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from soul.adapters.agent import SoulAgentAdapter
 from soul.adapters.reme import ReMeCliAdapter
-from soul.services.constants import (
+from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
     HOST_HTTP_API,
     HOST_SOUL_HTTP_API,
@@ -23,19 +23,18 @@ from soul.services.constants import (
     OP_TRACE_EVIDENCE,
     STATUS_SUCCESS,
 )
-from soul.services.reme_refs import compact_transition_summary, resolve_reme_workspace
-from soul.services.reme_transition import propose_reme_transition as propose_reme_transition_service
-from soul.services.state import (
-    apply_patch_proposal,
+from soul.services.reme.reme_refs import compact_transition_summary, resolve_reme_workspace
+from soul.services.reme.reme_transition import propose_reme_transition as propose_reme_transition_service
+from soul.services.integrations.integration_runs import append_integration_run
+from soul.services.state_core.proposals import apply_patch_proposal, propose_patch
+from soul.services.state_core.state_store import (
     append_patch_proposal,
     find_patch_proposal,
-    load_state_markdown,
     load_state,
-    propose_patch,
+    load_state_markdown,
     save_state,
 )
-from soul.services.integration_runs import append_integration_run
-from soul.services.state_types import PatchProposal
+from soul.services.shared.state_types import PatchProposal
 from soul.storage.database import connect, default_db_path, init_database
 
 

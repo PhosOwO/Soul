@@ -3,7 +3,7 @@
 from dataclasses import asdict
 from typing import Any
 
-from soul.services.reflection import extract_cognitive_diffs
+from soul.services.integrations.reflection import extract_cognitive_diffs
 
 
 def _message_text(message: dict[str, Any]) -> dict[str, Any]:

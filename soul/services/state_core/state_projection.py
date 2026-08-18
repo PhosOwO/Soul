@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from soul.services.state_policy import load_state_projection_policy
-from soul.services.state_store import int_value
-from soul.services.state_types import StateDoc, StateItem
-from soul.services.constants import PATCH_STATUS_ACCEPTED, PATCH_STATUS_ARCHIVED, PATCH_STATUS_REJECTED, STATE_KIND_ACCEPTED_BELIEF
+from soul.services.state_core.state_policy import load_state_projection_policy
+from soul.services.state_core.state_store import int_value
+from soul.services.shared.state_types import StateDoc, StateItem
+from soul.services.shared.constants import PATCH_STATUS_ACCEPTED, PATCH_STATUS_ARCHIVED, PATCH_STATUS_REJECTED, STATE_KIND_ACCEPTED_BELIEF
 
 
 def project_state_items(state: StateDoc, task: str = "", limit: int = 10) -> list[StateItem]:

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from soul.api import SoulApi
-from soul.services.constants import (
+from soul.services.shared.constants import (
     HOST_SOUL_MCP,
     MEMORY_MODE_LEGACY,
     MEMORY_MODE_SOUL_REME,

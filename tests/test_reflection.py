@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from soul.services.reflection import extract_cognitive_diffs, load_reflection_policy, load_reflection_rules, reflect_episode
+from soul.services.integrations.reflection import extract_cognitive_diffs, load_reflection_policy, load_reflection_rules, reflect_episode
 from soul.services.state import load_patch_proposals
 from soul.storage.database import connect, dumps_json, init_database, require_lastrowid
 

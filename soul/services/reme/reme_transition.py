@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from soul.adapters.reme import ReMeCliAdapter, reme_evidence_refs, reme_write_refs
-from soul.services.constants import (
+from soul.services.shared.constants import (
     HOST_SOUL_API,
     MEMORY_MODE_SOUL_REME,
     MEMORY_OWNER_REME,
@@ -15,7 +15,7 @@ from soul.services.constants import (
     STATE_OWNER_SOUL,
     STATUS_SUCCESS,
 )
-from soul.services.reme_refs import (
+from soul.services.reme.reme_refs import (
     append_reme_state_trace,
     compact_transition_summary,
     default_reme_workspace,
@@ -23,8 +23,9 @@ from soul.services.reme_refs import (
     safe_reme_note_name,
     safe_reme_session_id,
 )
-from soul.services.state import append_patch_proposal, load_state, propose_patch
-from soul.services.state_store import int_value
+from soul.services.state_core.proposals import propose_patch
+from soul.services.state_core.state_store import append_patch_proposal, load_state
+from soul.services.state_core.state_store import int_value
 
 
 def propose_reme_transition(

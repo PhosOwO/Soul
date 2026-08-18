@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from soul.services.constants import (
+from soul.services.shared.constants import (
     PATCH_STATUS_ACCEPTED,
     STATE_KIND_ACCEPTED_BELIEF,
     STATE_KIND_ACTIVE_CONSTRAINT,
@@ -10,8 +10,8 @@ from soul.services.constants import (
     STATE_KIND_OPEN_QUESTION,
     STATE_KIND_TENTATIVE_OBSERVATION,
 )
-from soul.services.state_projection import project_state_items
-from soul.services.state_types import StateDoc, StateItem
+from soul.services.state_core.state_projection import project_state_items
+from soul.services.shared.state_types import StateDoc, StateItem
 
 
 def format_state_context(state: StateDoc, limit: int = 10, task: str = "") -> str:

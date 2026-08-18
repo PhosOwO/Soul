@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from soul.services.text import compact_text
+from soul.services.shared.text import compact_text
 
 
 CONTEXT_PREFIXES = (

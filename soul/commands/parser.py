@@ -11,30 +11,27 @@ from pathlib import Path
 from typing import Any, Mapping, NoReturn
 
 from soul.adapters.reme import ReMeCliAdapter
-from soul.services.constants import (
+from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
     PATCH_STATUS_ACCEPTED,
     PATCH_STATUS_APPLIED,
     PATCH_STATUS_PROPOSED,
     PATCH_STATUS_REJECTED,
 )
-from soul.services.integration_runs import append_integration_run, latest_matching_run, read_integration_runs
-from soul.services.codex_workflow import ingest_codex_session
-from soul.services.importer import import_codex_session
-from soul.services.reflection import reflect_episode
-from soul.services.state import (
-    apply_patch_proposal,
+from soul.services.integrations.integration_runs import append_integration_run, latest_matching_run, read_integration_runs
+from soul.services.integrations.codex_workflow import ingest_codex_session
+from soul.services.integrations.importer import import_codex_session
+from soul.services.integrations.reflection import reflect_episode
+from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
+from soul.services.state_core.state_render import format_state_context
+from soul.services.state_core.state_store import (
     append_patch_proposal,
-    append_patch_status,
-    edit_patch_proposal,
     find_patch_proposal,
-    format_state_context,
-    load_state,
     load_patch_proposals,
-    propose_patch,
+    load_state,
     save_state,
 )
-from soul.services.text import compact_text
+from soul.services.shared.text import compact_text
 from soul.storage.database import connect, default_db_path, init_database
 
 
@@ -163,7 +160,7 @@ def state_edit_command(args: argparse.Namespace) -> None:
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
-    from soul.services.state import load_state_markdown
+    from soul.services.state_core.state_store import load_state_markdown
 
     print(load_state_markdown(limit=args.limit, task=args.task))
 

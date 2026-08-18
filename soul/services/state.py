@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # Compatibility facade: keep existing imports stable while state responsibilities
 # live in smaller service modules.
-from soul.services.knowledge import (
+from soul.services.state_core.knowledge import (
     contains_durable_signal,
     dedupe_preserve_order,
     durable_sentences,
@@ -13,7 +13,7 @@ from soul.services.knowledge import (
     stable_state_item_id,
     why_remember_for_statement,
 )
-from soul.services.proposals import (
+from soul.services.state_core.proposals import (
     add_state_item_operation,
     append_patch_status,
     apply_patch_proposal,
@@ -28,19 +28,19 @@ from soul.services.proposals import (
     state_item_operation_from_payload,
     why_remember_from_evidence,
 )
-from soul.services.state_projection import (
+from soul.services.state_core.state_projection import (
     is_state_item_active,
     project_state_items,
     projection_sort_key,
     state_item_matches_task,
 )
-from soul.services.state_render import (
+from soul.services.state_core.state_render import (
     format_items,
     format_projected_state_context,
     format_state_context,
     format_state_items,
 )
-from soul.services.state_store import (
+from soul.services.state_core.state_store import (
     DEFAULT_PATCH_LOG_NAME,
     DEFAULT_STATE_MARKDOWN_NAME,
     DEFAULT_STATE_NAME,

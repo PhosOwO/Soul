@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from soul.adapters.codex import parse_codex_jsonl
-from soul.services.importer import import_codex_session
+from soul.services.integrations.importer import import_codex_session
 from soul.storage.database import connect, init_database
 
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from soul.adapters.reme import reme_write_refs
-from soul.services.constants import REME_DIR_NAME, SOUL_DIR_NAME, TRACES_DIR_NAME
-from soul.services.text import compact_summary
+from soul.services.shared.constants import REME_DIR_NAME, SOUL_DIR_NAME, TRACES_DIR_NAME
+from soul.services.shared.text import compact_summary
 
 
 def resolve_reme_workspace(project_dir: Path, raw_workspace: Any) -> Path:

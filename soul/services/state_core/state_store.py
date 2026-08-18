@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from soul.services.constants import PATCH_STATUS_ACCEPTED, SOUL_DIR_NAME, STATE_DIR_NAME, STATE_KIND_ACCEPTED_BELIEF, STATE_KIND_ACTIVE_CONSTRAINT
-from soul.services.state_types import PatchProposal, StateDoc
+from soul.services.shared.constants import PATCH_STATUS_ACCEPTED, SOUL_DIR_NAME, STATE_DIR_NAME, STATE_KIND_ACCEPTED_BELIEF, STATE_KIND_ACTIVE_CONSTRAINT
+from soul.services.shared.state_types import PatchProposal, StateDoc
 
 
 DEFAULT_STATE_NAME = "state.json"
@@ -111,7 +111,7 @@ def load_state(project_dir: Path | None = None, project_name: str = "Soul Projec
 
 
 def save_state(state: StateDoc, project_dir: Path | None = None) -> None:
-    from soul.services.state_render import format_state_context
+    from soul.services.state_core.state_render import format_state_context
 
     paths = state_paths(project_dir)
     paths.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +120,7 @@ def save_state(state: StateDoc, project_dir: Path | None = None) -> None:
 
 
 def load_state_markdown(project_dir: Path | None = None, limit: int = 10, task: str = "") -> str:
-    from soul.services.state_render import format_state_context
+    from soul.services.state_core.state_render import format_state_context
 
     state = load_state(project_dir)
     context = format_state_context(state, limit=limit, task=task)

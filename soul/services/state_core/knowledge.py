@@ -4,10 +4,10 @@ import re
 from typing import Any, Mapping, cast
 from uuid import uuid4
 
-from soul.services.constants import PATCH_STATUS_ACCEPTED, PATCH_STATUS_NEEDS_REVIEW
-from soul.services.state_policy import load_state_projection_policy
-from soul.services.state_types import KnowledgePoint, StateItem
-from soul.services.text import compact_text
+from soul.services.shared.constants import PATCH_STATUS_ACCEPTED, PATCH_STATUS_NEEDS_REVIEW
+from soul.services.state_core.state_policy import load_state_projection_policy
+from soul.services.shared.state_types import KnowledgePoint, StateItem
+from soul.services.shared.text import compact_text
 
 
 def knowledge_points_from_evidence(evidence: dict[str, Any]) -> list[KnowledgePoint]:

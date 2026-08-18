@@ -4,8 +4,8 @@ import json
 from typing import Any, Mapping, Sequence, cast
 from uuid import uuid4
 
-from soul.services.knowledge import knowledge_points_from_evidence, normalize_knowledge_point
-from soul.services.constants import (
+from soul.services.state_core.knowledge import knowledge_points_from_evidence, normalize_knowledge_point
+from soul.services.shared.constants import (
     MEMORY_OWNER_REME,
     PATCH_OP_ADD_CONSTRAINT,
     PATCH_OP_ADD_OPEN_QUESTION,
@@ -22,9 +22,9 @@ from soul.services.constants import (
     STATE_KIND_OPEN_QUESTION,
     STATE_KIND_TENTATIVE_OBSERVATION,
 )
-from soul.services.state_store import append_patch_proposal, int_value, utc_now
-from soul.services.state_types import KnowledgePoint, PatchOperation, PatchProposal, ProposalRefs, StateDoc, StateItem
-from soul.services.text import compact_text
+from soul.services.state_core.state_store import append_patch_proposal, int_value, utc_now
+from soul.services.shared.state_types import KnowledgePoint, PatchOperation, PatchProposal, ProposalRefs, StateDoc, StateItem
+from soul.services.shared.text import compact_text
 
 
 def propose_patch(

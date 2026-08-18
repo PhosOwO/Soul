@@ -4,12 +4,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from soul.services.state import (
-    append_patch_proposal,
-    load_state,
-    load_state_markdown,
-    propose_patch,
-)
+from soul.services.state_core.proposals import propose_patch
+from soul.services.state_core.state_store import append_patch_proposal, load_state, load_state_markdown
 from soul.storage.database import dumps_json, project_scope_id, require_lastrowid
 
 
