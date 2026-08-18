@@ -122,6 +122,48 @@ def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_p
     assert '"memory_mode": "soul_reme"' in runs
 
 
+def test_soul_api_reme_transition_ignores_external_workspace_for_writes(tmp_path, monkeypatch):
+    captured_workspace = None
+
+    class FakeReMeAdapter:
+        def __init__(self, project_dir, workspace_dir=None):
+            nonlocal captured_workspace
+            captured_workspace = workspace_dir
+            self.workspace_dir = workspace_dir
+
+        def daily_write(self, **kwargs):
+            return ReMeJobResult(
+                job="daily_write",
+                command=["reme", "start", "job=daily_write"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                answer="",
+                metadata={"path": "daily/2026-08-18/fallback.md"},
+            )
+
+        def search(self, **kwargs):
+            return ReMeJobResult(
+                job="search",
+                command=["reme", "start", "job=search"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                answer="",
+                metadata={"counts": {"returned": 0}, "results": []},
+            )
+
+    monkeypatch.setattr("soul.api.ReMeCliAdapter", FakeReMeAdapter)
+
+    payload = SoulApi(tmp_path).propose_reme_transition(
+        evidence={"task": "Keep workspace local", "summary": "Do not write daily at project root"},
+        reme={"write_mode": "fallback_daily_write", "workspace_dir": str(tmp_path)},
+    )
+
+    assert captured_workspace == tmp_path / ".soul" / "reme"
+    assert payload["patch_proposal"]["evidence"]["reme"]["workspace_dir"].replace("\\", "/").endswith(".soul/reme")
+
+
 def test_soul_api_reme_transition_can_use_fallback_daily_write(tmp_path, monkeypatch):
     with connect(default_db_path(tmp_path)) as conn:
         init_database(conn, project_name="Demo")

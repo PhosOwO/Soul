@@ -15,6 +15,7 @@ from soul.services.state import (
     apply_patch_proposal,
     append_patch_proposal,
     find_patch_proposal,
+    load_state_markdown,
     load_state,
     propose_patch,
     record_state_event,
@@ -33,8 +34,13 @@ class SoulApi:
         self.project_dir = project_dir
 
     def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = "http-api") -> dict[str, Any]:
-        with self.connect_existing() as conn:
-            payload = SoulAgentAdapter(conn, self.project_dir).before_task(task, limit=limit)
+        state = load_state(self.project_dir, project_name=self.project_dir.name)
+        payload = {
+            "task": task,
+            "state": state,
+            "context": load_state_markdown(self.project_dir, limit=limit, task=task),
+            "state_artifact": ".soul/state/STATE.md",
+        }
         payload["scope"] = scope
         payload["injection"] = build_agent_injection(payload["context"])
         self.record_integration_run(
@@ -64,7 +70,7 @@ class SoulApi:
             or ""
         )
 
-        with self.connect_existing() as conn:
+        with self.connect_legacy_database() as conn:
             result = SoulAgentAdapter(conn, self.project_dir).after_task(
                 task=task or "DeepSeek Harness turn",
                 outcome=outcome or "No outcome text was provided.",
@@ -117,7 +123,7 @@ class SoulApi:
 
         adapter = ReMeCliAdapter(
             self.project_dir,
-            workspace_dir=resolve_reme_workspace(self.project_dir, reme_config.get("workspace_dir")),
+            workspace_dir=default_reme_workspace(self.project_dir),
         )
         write_mode = str(reme_config.get("write_mode") or "auto_memory")
         messages = normalized_reme_messages(
@@ -332,18 +338,9 @@ class SoulApi:
             )
         next_state = apply_patch_proposal(state, proposal, confirmed_by=confirmed_by)
         save_state(next_state, self.project_dir)
-        with self.connect_existing() as conn:
-            record_state_event(
-                conn,
-                "state_patch_applied",
-                proposal,
-                "soul-http-api",
-                f"Applied State Patch {proposal_id}",
-            )
-            conn.commit()
         return {"state": next_state, "applied_patch": proposal}
 
-    def connect_existing(self):
+    def connect_legacy_database(self):
         db_path = default_db_path(self.project_dir)
         conn = connect(db_path)
         init_database(conn, project_name=self.project_dir.name)
@@ -488,9 +485,13 @@ def optional_int(value: Any) -> int | None:
 
 def resolve_reme_workspace(project_dir: Path, raw_workspace: Any) -> Path:
     if not raw_workspace:
-        return project_dir / ".soul" / "reme"
+        return default_reme_workspace(project_dir)
     path = Path(str(raw_workspace))
     return path if path.is_absolute() else project_dir / path
+
+
+def default_reme_workspace(project_dir: Path) -> Path:
+    return project_dir / ".soul" / "reme"
 
 
 def render_reme_episode(task: str, outcome: str, episode: dict[str, Any]) -> str:

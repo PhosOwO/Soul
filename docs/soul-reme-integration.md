@@ -222,6 +222,10 @@ Default behavior:
 }
 ```
 
+Soul writes host evidence to the project-local ReMe workspace at `.soul/reme`.
+Standard Codex, TraeX, and DeepSeek Harness integrations should not override
+the write workspace.
+
 Inputs:
 
 - `task`: current task or user request.

@@ -73,7 +73,9 @@ def test_traex_install_copies_templates_and_initializes_project(tmp_path: Path) 
     assert (project / ".trae" / "hooks.json").is_file()
     assert (project / ".trae" / "hooks" / "soul_user_prompt_submit.py").is_file()
     assert (project / ".trae" / "hooks" / "soul_stop.py").is_file()
-    assert default_db_path(project).is_file()
+    assert (project / ".soul" / "state" / "state.json").is_file()
+    assert (project / ".soul" / "state" / "STATE.md").is_file()
+    assert not default_db_path(project).exists()
     assert "ReMe preflight:" in completed.stdout
     assert "cli: not found" in completed.stdout
 
@@ -129,7 +131,9 @@ def test_traex_user_install_uses_trae_home_without_hardcoded_home(tmp_path: Path
     assert "[[hooks.UserPromptSubmit.hooks]]" in text
     assert "[[hooks.Stop.hooks]]" in text
     assert str(project) in text
-    assert default_db_path(project).is_file()
+    assert (project / ".soul" / "state" / "state.json").is_file()
+    assert (project / ".soul" / "state" / "STATE.md").is_file()
+    assert not default_db_path(project).exists()
 
 
 def test_traex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> None:
@@ -261,6 +265,31 @@ def test_reme_doctor_reports_stopped_service_without_failing(tmp_path: Path) -> 
     assert "cli: " in completed.stdout
     assert "service: not available" in completed.stdout
     assert "reme start" in completed.stdout
+
+
+def test_reme_doctor_warns_when_workspace_files_are_at_project_root(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    reme = fake_bin / "reme"
+    reme.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    reme.chmod(0o755)
+    project = tmp_path / "consumer"
+    project.mkdir()
+    (project / ".soul" / "reme").mkdir(parents=True)
+    (project / "daily").mkdir()
+    (project / "daily" / "2026-08-18.md").write_text("misplaced\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "reme", "doctor", "--project-dir", str(project)],
+        cwd=ROOT,
+        env={**cli_env(), "PATH": str(fake_bin)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "ReMe files appear to be written at the project root" in completed.stdout
+    assert "found: daily" in completed.stdout
 
 
 def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:

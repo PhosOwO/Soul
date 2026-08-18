@@ -122,7 +122,9 @@ def test_codex_user_install_uses_codex_home_without_hardcoded_home(tmp_path: Pat
     assert "[mcp_servers.soul]" in text
     assert "soul-mcp.js" in text
     assert str(project) in text
-    assert (project / ".soul" / "state" / "soul.db").is_file()
+    assert (project / ".soul" / "state" / "state.json").is_file()
+    assert (project / ".soul" / "state" / "STATE.md").is_file()
+    assert not (project / ".soul" / "state" / "soul.db").exists()
 
 
 def test_codex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> None:
@@ -224,3 +226,4 @@ def test_init_defaults_project_name_to_current_directory(tmp_path: Path) -> None
 
     assert state_json["project"] == "lark-harmony"
     assert "Project: lark-harmony" in state_markdown
+    assert not (project / ".soul" / "state" / "soul.db").exists()

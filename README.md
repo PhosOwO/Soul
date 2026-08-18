@@ -57,7 +57,7 @@ Runtime files stay under the target project:
 ```text
 .soul/
   reme/       ReMe memory and evidence consumed by Soul
-  state/      STATE.md, state.json, soul.db, patch_proposals.jsonl
+  state/      STATE.md, state.json, patch_proposals.jsonl, integration_runs.jsonl
   traces/     evidence-to-state trace files
 ```
 

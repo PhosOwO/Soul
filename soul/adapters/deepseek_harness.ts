@@ -17,7 +17,6 @@ export type SoulHarnessOptions = {
   scope?: string;
   stateLimit?: number;
   memoryMode?: "legacy" | "soul_reme" | "off";
-  remeWorkspaceDir?: string;
   remeSearchLimit?: number;
 };
 
@@ -28,7 +27,6 @@ export class DeepSeekHarnessSoulPlugin {
   private readonly scope: string;
   private readonly stateLimit: number;
   private readonly memoryMode: "legacy" | "soul_reme" | "off";
-  private readonly remeWorkspaceDir?: string;
   private readonly remeSearchLimit: number;
 
   constructor(options: SoulHarnessOptions = {}) {
@@ -36,7 +34,6 @@ export class DeepSeekHarnessSoulPlugin {
     this.scope = options.scope ?? process.env.SOUL_SCOPE ?? "project";
     this.stateLimit = options.stateLimit ?? 10;
     this.memoryMode = options.memoryMode ?? parseMemoryMode(process.env.SOUL_DSH_MEMORY_MODE);
-    this.remeWorkspaceDir = options.remeWorkspaceDir ?? process.env.SOUL_REME_WORKSPACE_DIR;
     this.remeSearchLimit = options.remeSearchLimit ?? Number(process.env.SOUL_REME_SEARCH_LIMIT ?? 5);
   }
 
@@ -82,7 +79,6 @@ export class DeepSeekHarnessSoulPlugin {
       return postJson(`${this.baseUrl}/reme/transition/propose`, {
         ...body,
         reme: {
-          workspace_dir: this.remeWorkspaceDir,
           search_limit: this.remeSearchLimit,
         },
       });

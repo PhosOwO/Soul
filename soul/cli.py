@@ -30,54 +30,33 @@ from soul.storage.database import connect, default_db_path, init_database
 
 def init_command(args: argparse.Namespace) -> None:
     project_name = args.project_name or Path.cwd().name
-    db_path = default_db_path()
-    with connect(db_path) as conn:
-        init_database(conn, project_name=project_name)
     load_state(project_name=project_name)
-    print(f"Initialized Soul database: {db_path}")
+    print(f"Initialized Soul state: {Path.cwd() / '.soul' / 'state'}")
 
 
 def status_command(_: argparse.Namespace) -> None:
-    db_path = default_db_path()
-    if not db_path.exists():
-        abort("Soul is not initialized. Run `soul init` first.")
-
-    with connect(db_path) as conn:
-        init_database(conn)
-        project = conn.execute("SELECT name FROM scopes WHERE parent_id IS NULL ORDER BY id LIMIT 1").fetchone()
-        episodes = conn.execute(
-            "SELECT id, source, summary, created_at FROM episodes ORDER BY id DESC LIMIT 5"
-        ).fetchall()
-        cognitive_events = conn.execute(
-            "SELECT id, type, reason, created_at FROM cognitive_events ORDER BY id DESC LIMIT 5"
-        ).fetchall()
-        system_events = conn.execute(
-            "SELECT id, type, reason, created_at FROM system_events ORDER BY id DESC LIMIT 5"
-        ).fetchall()
-
+    state = load_state(project_name=Path.cwd().name)
+    integration_runs = read_integration_runs(Path.cwd(), limit=5)
+    patches = read_recent_jsonl(Path.cwd() / ".soul" / "state" / "patch_proposals.jsonl", limit=5)
     print("Soul Status")
     print("")
-    print(f"Project: {project['name'] if project else 'unknown'}")
+    print(f"Project: {state.get('project', 'unknown')}")
     print("")
-    print(format_state_context(load_state(), limit=10))
+    print(format_state_context(state, limit=10))
     print("")
-    print("Recent Episodes:")
-    for row in episodes:
-        print(f"- {row['id']}. [{row['source']}] {row['summary']} ({row['created_at']})")
-    if not episodes:
+    print("Recent Integration Runs:")
+    for run in integration_runs:
+        print(
+            f"- [{run.get('host', 'unknown')}] {run.get('operation', 'unknown')} "
+            f"({run.get('created_at', 'unknown')})"
+        )
+    if not integration_runs:
         print("- none")
     print("")
-    print("Recent Cognitive Events:")
-    for row in cognitive_events:
-        reason = f": {row['reason']}" if row["reason"] else ""
-        print(f"- {row['id']}. {row['type']}{reason}")
-    if not cognitive_events:
-        print("- none")
-    print("")
-    print("Recent System Events:")
-    for row in system_events:
-        print(f"- {row['id']}. {row['type']} ({row['created_at']})")
-    if not system_events:
+    print("Recent Patch Proposals:")
+    for patch in patches:
+        print(f"- {patch.get('id', 'unknown')} [{patch.get('status', 'unknown')}] {patch.get('source', 'unknown')}")
+    if not patches:
         print("- none")
 
 
@@ -109,31 +88,20 @@ def state_apply_command(args: argparse.Namespace) -> None:
         )
     next_state = apply_patch_proposal(state, proposal, confirmed_by=args.confirmed_by)
     save_state(next_state)
-    with connect_existing() as conn:
-        record_state_event(
-            conn,
-            "state_patch_applied",
-            proposal,
-            "soul state apply",
-            f"Applied State Patch {args.proposal_id}",
-        )
-        conn.commit()
     print(f"Applied State Patch: {args.proposal_id}")
     print(f"New State version: {next_state['version']}")
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
-    from soul.adapters.agent import SoulAgentAdapter
+    from soul.services.state import load_state_markdown
 
-    with connect_existing() as conn:
-        payload = SoulAgentAdapter(conn).before_task(args.task, limit=args.limit)
-    print(payload["context"])
+    print(load_state_markdown(limit=args.limit, task=args.task))
 
 
 def agent_after_task_command(args: argparse.Namespace) -> None:
     from soul.adapters.agent import SoulAgentAdapter
 
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         payload = SoulAgentAdapter(conn).after_task(
             args.task,
             args.outcome,
@@ -153,7 +121,7 @@ def import_codex_command(args: argparse.Namespace) -> None:
     if not path.exists():
         abort(f"Codex session file not found: {path}")
 
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         episode_id = import_codex_session(conn, path)
         row = conn.execute("SELECT summary, metadata_json FROM episodes WHERE id = ?", (episode_id,)).fetchone()
     print(f"Imported Codex episode: {episode_id}")
@@ -162,7 +130,7 @@ def import_codex_command(args: argparse.Namespace) -> None:
 
 
 def list_episodes_command(_: argparse.Namespace) -> None:
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         rows = conn.execute(
             "SELECT id, source, summary, created_at FROM episodes ORDER BY id"
         ).fetchall()
@@ -171,7 +139,7 @@ def list_episodes_command(_: argparse.Namespace) -> None:
 
 
 def show_episode_command(args: argparse.Namespace) -> None:
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         row = conn.execute("SELECT * FROM episodes WHERE id = ?", (args.episode_id,)).fetchone()
     if row is None:
         abort(f"Episode not found: {args.episode_id}")
@@ -205,7 +173,7 @@ def show_episode_command(args: argparse.Namespace) -> None:
 
 
 def reflect_episode_command(args: argparse.Namespace) -> None:
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         try:
             patch_proposal_ids = reflect_episode(conn, args.episode_id, max_patches=args.max_patches)
         except ValueError as exc:
@@ -225,7 +193,7 @@ def codex_ingest_command(args: argparse.Namespace) -> None:
     if not path.exists():
         abort(f"Codex session file not found: {path}")
 
-    with connect_existing() as conn:
+    with connect_legacy_database() as conn:
         result = ingest_codex_session(conn, path, max_patches=args.max_patches)
 
     action = "Imported" if result.imported else "Updated"
@@ -381,15 +349,14 @@ def install_traex_user_config(args: argparse.Namespace, project_dir: Path) -> No
 
 
 def init_project(project_dir: Path, *, project_name: str | None = None) -> None:
-    db_path = project_dir / ".soul" / "state" / "soul.db"
-    with connect(db_path) as conn:
-        init_database(conn, project_name=project_name or project_dir.name)
-    print(f"Initialized Soul database: {db_path}")
+    load_state(project_dir, project_name=project_name or project_dir.name)
+    print(f"Initialized Soul state: {project_dir / '.soul' / 'state'}")
 
 
 def reme_doctor_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
     print_reme_preflight(project_dir, create_workspace=args.create_workspace)
+    print_reme_workspace_layout_warnings(project_dir)
 
 
 def traex_doctor_command(args: argparse.Namespace) -> None:
@@ -445,6 +412,19 @@ def print_reme_preflight(project_dir: Path, *, create_workspace: bool) -> bool:
         else:
             print("- action: start ReMe with `reme start` before expecting Soul evidence writes.")
     return result.ok
+
+
+def print_reme_workspace_layout_warnings(project_dir: Path) -> None:
+    default_workspace = project_dir / ".soul" / "reme"
+    root_daily = project_dir / "daily"
+    root_session = project_dir / "session"
+    workspace_has_files = any(default_workspace.rglob("*")) if default_workspace.exists() else False
+    misplaced = [path for path in (root_daily, root_session) if path.exists()]
+    if misplaced and not workspace_has_files:
+        print("- warning: ReMe files appear to be written at the project root, not under .soul/reme.")
+        for path in misplaced:
+            print(f"  - found: {path.relative_to(project_dir)}")
+        print("- action: remove custom reme.workspace_dir values and use Soul's default .soul/reme workspace.")
 
 
 MANAGED_TRAEX_BEGIN = "# >>> SoulKit managed TraeX integration >>>"
@@ -747,12 +727,10 @@ def check_http_health(api_url: str) -> str:
         return f"not reachable: {str(exc).splitlines()[0]}"
 
 
-def connect_existing():
+def connect_legacy_database():
     db_path = default_db_path()
-    if not Path(db_path).exists():
-        abort("Soul is not initialized. Run `soul init` first.")
     conn = connect(db_path)
-    init_database(conn)
+    init_database(conn, project_name=load_state().get("project", Path.cwd().name))
     return conn
 
 
@@ -764,7 +742,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soul", description="Soul Core command line interface.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = subparsers.add_parser("init", help="Initialize .soul/state/soul.db.")
+    init_parser = subparsers.add_parser("init", help="Initialize .soul/state state files.")
     init_parser.add_argument("--project-name", help="Defaults to the current directory name.")
     init_parser.set_defaults(func=init_command)
 
@@ -825,7 +803,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--codex-config",
         help="Override Codex config path. Defaults to $CODEX_HOME/config.toml or the current user's Codex home.",
     )
-    codex_install.add_argument("--init", action="store_true", help="Initialize .soul/state/soul.db in the target project.")
+    codex_install.add_argument("--init", action="store_true", help="Initialize .soul/state files in the target project.")
     codex_install.add_argument("--project-name", help="Project name to use with --init. Defaults to project directory name.")
     codex_install.add_argument("--skip-reme-check", action="store_true", help="Skip the non-blocking ReMe PATH preflight.")
     codex_install.set_defaults(func=codex_install_command)
@@ -863,7 +841,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override user TraeX config path. Defaults to $TRAE_HOME/traecli.toml or the current user's TraeX home.",
     )
     traex_install.add_argument("--force", action="store_true", help="Overwrite existing .trae Soul integration files.")
-    traex_install.add_argument("--init", action="store_true", help="Initialize .soul/state/soul.db in the target project.")
+    traex_install.add_argument("--init", action="store_true", help="Initialize .soul/state files in the target project.")
     traex_install.add_argument("--project-name", help="Project name to use with --init. Defaults to project directory name.")
     traex_install.add_argument("--skip-reme-check", action="store_true", help="Skip the non-blocking ReMe PATH preflight.")
     traex_install.set_defaults(func=traex_install_command)

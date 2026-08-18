@@ -51,7 +51,6 @@ TOOLS: list[dict[str, Any]] = [
                 "reme": {
                     "type": "object",
                     "properties": {
-                        "workspace_dir": {"type": "string"},
                         "search_limit": {"type": "integer", "minimum": 1},
                         "date": {"type": "string"},
                         "write_mode": {"type": "string", "enum": ["auto_memory", "fallback_daily_write"]},
