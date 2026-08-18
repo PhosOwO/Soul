@@ -38,6 +38,7 @@ docs/
 !docs/
 docs/*
 !docs/soul-reme-integration.md
+!docs/refactor-code-map.md
 
 # Generated benchmark outputs
 benchmarks/**/results/**

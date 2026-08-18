@@ -2,15 +2,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
-from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from soul.adapters.agent import SoulAgentAdapter
-from soul.adapters.reme import ReMeCliAdapter, reme_evidence_refs, reme_write_refs
+from soul.adapters.reme import ReMeCliAdapter
+from soul.services.constants import (
+    HOST_DEEPSEEK_HARNESS,
+    HOST_HTTP_API,
+    HOST_SOUL_HTTP_API,
+    MEMORY_MODE_LEGACY,
+    MEMORY_MODE_SOUL_REME,
+    OP_CONSOLIDATE_MEMORY,
+    OP_GET_PROACTIVE_TOPICS,
+    OP_GET_STATE,
+    OP_PROPOSE_TRANSITION,
+    OP_READ_EVIDENCE,
+    OP_TRACE_EVIDENCE,
+    STATUS_SUCCESS,
+)
+from soul.services.reme_refs import compact_transition_summary, resolve_reme_workspace
+from soul.services.reme_transition import propose_reme_transition as propose_reme_transition_service
 from soul.services.state import (
     apply_patch_proposal,
     append_patch_proposal,
@@ -20,8 +34,8 @@ from soul.services.state import (
     propose_patch,
     save_state,
 )
-from soul.services.text import compact_summary
 from soul.services.integration_runs import append_integration_run
+from soul.services.state_types import PatchProposal
 from soul.storage.database import connect, default_db_path, init_database
 
 
@@ -33,7 +47,7 @@ class SoulApi:
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
 
-    def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = "http-api") -> dict[str, Any]:
+    def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = HOST_HTTP_API) -> dict[str, Any]:
         state = load_state(self.project_dir, project_name=self.project_dir.name)
         payload = {
             "task": task,
@@ -46,8 +60,8 @@ class SoulApi:
         self.record_integration_run(
             {
                 "host": source,
-                "operation": "get_state",
-                "status": "success",
+                "operation": OP_GET_STATE,
+                "status": STATUS_SUCCESS,
                 "injected": bool(payload.get("injection")),
                 "task": compact_transition_summary(task, 160),
                 "state_version": (payload.get("state") or {}).get("version") if isinstance(payload.get("state"), dict) else None,
@@ -76,16 +90,16 @@ class SoulApi:
                 outcome=outcome or "No outcome text was provided.",
                 evidence={
                     **evidence_payload,
-                    "source": evidence_payload.get("source", "deepseek-harness"),
+                    "source": evidence_payload.get("source", HOST_DEEPSEEK_HARNESS),
                     "episode": episode_payload,
                 },
             )
         self.record_integration_run(
             {
-                "host": str(evidence_payload.get("source") or "deepseek-harness"),
-                "operation": "propose_transition",
-                "status": "success",
-                "memory_mode": "legacy",
+                "host": str(evidence_payload.get("source") or HOST_DEEPSEEK_HARNESS),
+                "operation": OP_PROPOSE_TRANSITION,
+                "status": STATUS_SUCCESS,
+                "memory_mode": MEMORY_MODE_LEGACY,
                 "task": compact_transition_summary(task, 160),
                 "episode_id": result.get("episode_id"),
                 "patch_id": (result.get("patch_proposal") or {}).get("id")
@@ -101,140 +115,14 @@ class SoulApi:
         episode: dict[str, Any] | None = None,
         reme: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        evidence_payload = dict(evidence or {})
-        episode_payload = episode or {}
-        reme_config = reme or {}
-        task = str(evidence_payload.get("task") or episode_payload.get("task") or "")
-        outcome = str(
-            evidence_payload.get("outcome")
-            or evidence_payload.get("summary")
-            or episode_payload.get("outcome")
-            or ""
+        return propose_reme_transition_service(
+            project_dir=self.project_dir,
+            evidence=evidence,
+            episode=episode,
+            reme=reme,
+            record_integration_run=self.record_integration_run,
+            adapter_class=ReMeCliAdapter,
         )
-        fallback_session_id = "soul-agent-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        session_id = str(
-            evidence_payload.get("session_id")
-            or episode_payload.get("session_id")
-            or fallback_session_id
-        )
-        raw_source = str(evidence_payload.get("source") or "soul-api")
-        source = raw_source.removesuffix(":reme")
-        reme_source = f"{source}:reme"
-
-        adapter = ReMeCliAdapter(
-            self.project_dir,
-            workspace_dir=default_reme_workspace(self.project_dir),
-        )
-        write_mode = str(reme_config.get("write_mode") or "auto_memory")
-        messages = normalized_reme_messages(
-            evidence_payload=evidence_payload,
-            episode_payload=episode_payload,
-            task=task,
-            outcome=outcome,
-        )
-        note_name = safe_reme_note_name(f"episode_{session_id}")
-        actual_write_mode = write_mode
-        if write_mode == "fallback_daily_write":
-            content = render_reme_episode(task=task, outcome=outcome, episode=episode_payload)
-            write_result = adapter.daily_write(
-                name=note_name,
-                description="Agent episode captured as ReMe memory for Soul evidence",
-                session_id=safe_reme_session_id(session_id),
-                content=content,
-                date=str(reme_config.get("date") or ""),
-                metadata={
-                    "source": source,
-                    "memory_owner": "reme",
-                    "state_owner": "soul",
-                    "memory_mode": "soul_reme",
-                },
-            )
-        elif write_mode == "auto_memory":
-            try:
-                write_result = adapter.auto_memory(
-                    session_id=safe_reme_session_id(session_id),
-                    messages=messages,
-                    memory_hint=str(
-                        reme_config.get("memory_hint")
-                        or "Preserve durable project decisions, constraints, procedures, user preferences, and evidence links."
-                    ),
-                    date=str(reme_config.get("date") or ""),
-                )
-            except RuntimeError as exc:
-                if not should_fallback_reme_write(exc, reme_config):
-                    raise
-                actual_write_mode = "fallback_daily_write"
-                content = render_reme_episode(task=task, outcome=outcome, episode=episode_payload)
-                write_result = adapter.daily_write(
-                    name=note_name,
-                    description="Agent episode captured as ReMe memory for Soul evidence",
-                    session_id=safe_reme_session_id(session_id),
-                    content=content,
-                    date=str(reme_config.get("date") or ""),
-                    metadata={
-                        "source": source,
-                        "memory_owner": "reme",
-                        "state_owner": "soul",
-                        "memory_mode": "soul_reme",
-                        "fallback_reason": compact_transition_summary(str(exc)),
-                    },
-                )
-        else:
-            raise ValueError(f"Unsupported ReMe write_mode: {write_mode}")
-        search_query = " ".join(part for part in [task, outcome] if part).strip() or note_name
-        search_result = adapter.search(query=search_query, limit=int_value(reme_config.get("search_limit"), default=5))
-        refs = merge_evidence_refs(reme_evidence_refs(search_result.metadata), reme_write_refs(write_result.metadata))
-
-        patch_evidence = {
-            "source": reme_source,
-            "task": task,
-            "summary": compact_transition_summary(outcome),
-            "content": "ReMe evidence refs attached; ordinary memory body remains in ReMe.",
-            "memory_owner": "reme",
-            "state_owner": "soul",
-            "evidence_refs": refs,
-            "reme": {
-                "workspace_dir": str(adapter.workspace_dir),
-                "write_mode": actual_write_mode,
-                "requested_write_mode": write_mode,
-                "write_paths": [ref["path"] for ref in reme_write_refs(write_result.metadata)],
-                "search_counts": search_result.metadata.get("counts", {}),
-            },
-        }
-        proposal = propose_patch(load_state(self.project_dir), patch_evidence, source=reme_source)
-        append_patch_proposal(proposal, self.project_dir)
-        trace_path = append_reme_state_trace(
-            self.project_dir,
-            task=task,
-            write_metadata=write_result.metadata,
-            search_metadata=search_result.metadata,
-            evidence_refs=refs,
-            proposal=proposal,
-        )
-        self.record_integration_run(
-            {
-                "host": raw_source,
-                "operation": "propose_reme_transition",
-                "status": "success",
-                "memory_mode": "soul_reme",
-                "task": compact_transition_summary(task, 160),
-                "patch_id": proposal.get("id"),
-                "reme_write_mode": actual_write_mode,
-                "reme_requested_write_mode": write_mode,
-                "evidence_ref_count": len(refs),
-                "trace_path": str(trace_path.relative_to(self.project_dir)).replace("\\", "/"),
-            }
-        )
-        return {
-            "memory_mode": "soul_reme",
-            "reme_write": write_result.metadata,
-            "reme_write_mode": actual_write_mode,
-            "reme_requested_write_mode": write_mode,
-            "reme_search": search_result.metadata,
-            "evidence_refs": refs,
-            "patch_proposal": proposal,
-            "trace_path": str(trace_path.relative_to(self.project_dir)).replace("\\", "/"),
-        }
 
     def record_integration_run(self, record: dict[str, Any]) -> None:
         try:
@@ -255,8 +143,8 @@ class SoulApi:
         )
         result = adapter.read(path=path, start_line=start_line, end_line=end_line)
         return {
-            "memory_mode": "soul_reme",
-            "operation": "read_evidence",
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "operation": OP_READ_EVIDENCE,
             "path": path,
             "start_line": start_line,
             "end_line": end_line,
@@ -277,8 +165,8 @@ class SoulApi:
         )
         result = adapter.traverse(path=path, depth=depth, direction=direction)
         return {
-            "memory_mode": "soul_reme",
-            "operation": "trace_evidence",
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "operation": OP_TRACE_EVIDENCE,
             "path": path,
             "depth": depth,
             "direction": direction,
@@ -300,8 +188,8 @@ class SoulApi:
         )
         result = adapter.auto_dream(date=date, hint=hint, scan_days=scan_days, max_units=max_units)
         return {
-            "memory_mode": "soul_reme",
-            "operation": "consolidate_memory",
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "operation": OP_CONSOLIDATE_MEMORY,
             "answer": result.answer,
             "metadata": result.metadata,
         }
@@ -318,18 +206,18 @@ class SoulApi:
         )
         result = adapter.proactive(date=date, include_content=include_content)
         return {
-            "memory_mode": "soul_reme",
-            "operation": "get_proactive_topics",
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "operation": OP_GET_PROACTIVE_TOPICS,
             "answer": result.answer,
             "metadata": result.metadata,
         }
 
-    def propose_patch(self, evidence: dict[str, Any]) -> dict[str, Any]:
-        proposal = propose_patch(load_state(self.project_dir), evidence, source=evidence.get("source", "soul-http-api"))
+    def propose_patch(self, evidence: dict[str, Any]) -> PatchProposal:
+        proposal = propose_patch(load_state(self.project_dir), evidence, source=evidence.get("source", HOST_SOUL_HTTP_API))
         append_patch_proposal(proposal, self.project_dir)
         return proposal
 
-    def apply_patch(self, proposal_id: str, confirmed_by: str = "soul-http-api") -> dict[str, Any]:
+    def apply_patch(self, proposal_id: str, confirmed_by: str = HOST_SOUL_HTTP_API) -> dict[str, Any]:
         proposal = find_patch_proposal(proposal_id, self.project_dir)
         state = load_state(self.project_dir)
         if proposal.get("base_version") != state.get("version"):
@@ -362,14 +250,14 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             if parsed.path == "/health":
-                self.write_json({"ok": True, "service": "soul-http-api"})
+                self.write_json({"ok": True, "service": HOST_SOUL_HTTP_API})
                 return
             if parsed.path == "/state":
                 query = parse_qs(parsed.query)
                 task = first_query_value(query, "task", "")
                 scope = first_query_value(query, "scope", "project")
                 limit = int_value(first_query_value(query, "limit", "10"), default=10)
-                source = first_query_value(query, "source", "http-api")
+                source = first_query_value(query, "source", HOST_HTTP_API)
                 self.write_json(api.get_state(task=task, scope=scope, limit=limit, source=source))
                 return
             self.write_json({"error": "not_found"}, status=404)
@@ -435,11 +323,11 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                     )
                     return
                 if self.path == "/patch/propose":
-                    self.write_json(api.propose_patch(payload.get("evidence", payload)))
+                    self.write_json(dict(api.propose_patch(payload.get("evidence", payload))))
                     return
                 if self.path == "/patch/apply":
                     proposal_id = str(payload["proposal_id"])
-                    confirmed_by = str(payload.get("confirmed_by", "soul-http-api"))
+                    confirmed_by = str(payload.get("confirmed_by", HOST_SOUL_HTTP_API))
                     self.write_json(api.apply_patch(proposal_id, confirmed_by=confirmed_by))
                     return
                 self.write_json({"error": "not_found"}, status=404)
@@ -481,145 +369,6 @@ def optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
-
-
-def resolve_reme_workspace(project_dir: Path, raw_workspace: Any) -> Path:
-    if not raw_workspace:
-        return default_reme_workspace(project_dir)
-    path = Path(str(raw_workspace))
-    return path if path.is_absolute() else project_dir / path
-
-
-def default_reme_workspace(project_dir: Path) -> Path:
-    return project_dir / ".soul" / "reme"
-
-
-def render_reme_episode(task: str, outcome: str, episode: dict[str, Any]) -> str:
-    events = episode.get("events", [])
-    lines = [
-        "# Soul Agent Episode",
-        "",
-        "## Task",
-        task or "No task text was provided.",
-        "",
-        "## Outcome",
-        outcome or "No outcome text was provided.",
-        "",
-        "## Event Summary",
-        f"- event_count: {len(events) if isinstance(events, list) else 0}",
-    ]
-    return "\n".join(lines)
-
-
-def normalized_reme_messages(
-    *,
-    evidence_payload: dict[str, Any],
-    episode_payload: dict[str, Any],
-    task: str,
-    outcome: str,
-) -> list[dict[str, Any]]:
-    raw_messages = evidence_payload.get("messages") or episode_payload.get("messages")
-    if isinstance(raw_messages, list) and raw_messages:
-        messages: list[dict[str, Any]] = []
-        for message in raw_messages:
-            if not isinstance(message, dict):
-                continue
-            role = str(message.get("role") or "user")
-            content = message.get("content", message.get("text", ""))
-            normalized = {"name": role, "role": role, "content": str(content)}
-            if message.get("created_at"):
-                normalized["created_at"] = str(message["created_at"])
-            messages.append(normalized)
-        if messages:
-            return messages
-    return [
-        {"name": "user", "role": "user", "content": task or "No task text was provided."},
-        {"name": "assistant", "role": "assistant", "content": outcome or "No outcome text was provided."},
-    ]
-
-
-def should_fallback_reme_write(exc: RuntimeError, reme_config: dict[str, Any]) -> bool:
-    if reme_config.get("fallback_daily_write") is False:
-        return False
-    text = str(exc).lower()
-    fallback_markers = [
-        "missing credentials",
-        "api_key",
-        "openai_api_key",
-        "workload_identity",
-        "model",
-        "exhausted all",
-    ]
-    return any(marker in text for marker in fallback_markers)
-
-
-def merge_evidence_refs(*ref_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: list[dict[str, Any]] = []
-    seen: set[tuple[Any, ...]] = set()
-    for refs in ref_lists:
-        for ref in refs:
-            key = (ref.get("type"), ref.get("path"), ref.get("start_line"), ref.get("end_line"), ref.get("chunk_id"))
-            if key in seen:
-                continue
-            seen.add(key)
-            merged.append(ref)
-    return merged
-
-
-def safe_reme_note_name(raw: str) -> str:
-    name = re.sub(r"[^A-Za-z0-9_-]+", "_", raw.strip())[:80].strip("_")
-    return name or "deepseek_harness_episode"
-
-
-def safe_reme_session_id(raw: str) -> str:
-    session_id = re.sub(r"[^A-Za-z0-9_.:-]+", "-", raw.strip())[:120].strip("-")
-    return session_id or "soul-agent"
-
-
-def compact_transition_summary(text: str, limit: int = 240) -> str:
-    return compact_summary(
-        text,
-        limit,
-        fallback="Agent episode was written to ReMe; review evidence refs for state changes.",
-    )
-
-
-def append_reme_state_trace(
-    project_dir: Path,
-    *,
-    task: str,
-    write_metadata: dict[str, Any],
-    search_metadata: dict[str, Any],
-    evidence_refs: list[dict[str, Any]],
-    proposal: dict[str, Any],
-) -> Path:
-    trace_path = project_dir / ".soul" / "traces" / "reme_state_trace.md"
-    trace_path.parent.mkdir(parents=True, exist_ok=True)
-    counts = search_metadata.get("counts", {})
-    lines = [
-        f"## {datetime.now(UTC).replace(microsecond=0).isoformat().replace('+00:00', 'Z')}",
-        "",
-        f"- task: {compact_transition_summary(task, 160)}",
-        f"- reme_write_paths: {', '.join(ref['path'] for ref in reme_write_refs(write_metadata))}",
-        f"- search_counts: vector={counts.get('vector', 0)}, keyword={counts.get('keyword', 0)}, returned={counts.get('returned', 0)}, hybrid={counts.get('hybrid', False)}",
-        f"- soul_patch_id: {proposal.get('id', '')}",
-        f"- soul_patch_status: {proposal.get('status', '')}",
-        f"- review_recommendation: {proposal.get('review_recommendation', '')}",
-        "- evidence_refs:",
-    ]
-    if evidence_refs:
-        for ref in evidence_refs:
-            line_range = ""
-            if ref.get("start_line") is not None and ref.get("end_line") is not None:
-                line_range = f":{ref['start_line']}-{ref['end_line']}"
-            chunk = f"#{ref['chunk_id']}" if ref.get("chunk_id") else ""
-            lines.append(f"  - reme://{ref.get('path', '')}{line_range}{chunk}")
-    else:
-        lines.append("  - none")
-    lines.append("")
-    with trace_path.open("a", encoding="utf-8") as file:
-        file.write("\n".join(lines))
-    return trace_path
 
 
 def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:

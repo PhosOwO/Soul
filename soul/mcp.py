@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from soul.api import SoulApi
+from soul.services.constants import (
+    HOST_SOUL_MCP,
+    MEMORY_MODE_LEGACY,
+    MEMORY_MODE_SOUL_REME,
+    REME_WRITE_MODE_AUTO_MEMORY,
+    REME_WRITE_MODE_FALLBACK_DAILY,
+)
 
 
 SERVER_NAME = "soul-core-mcp"
@@ -45,7 +52,7 @@ TOOLS: list[dict[str, Any]] = [
                 "session_id": {"type": "string"},
                 "memory_mode": {
                     "type": "string",
-                    "enum": ["soul_reme", "legacy"],
+                    "enum": [MEMORY_MODE_SOUL_REME, MEMORY_MODE_LEGACY],
                     "description": "Defaults to soul_reme. Use legacy only to bypass ReMe and write evidence directly to Soul state flow.",
                 },
                 "reme": {
@@ -53,7 +60,7 @@ TOOLS: list[dict[str, Any]] = [
                     "properties": {
                         "search_limit": {"type": "integer", "minimum": 1},
                         "date": {"type": "string"},
-                        "write_mode": {"type": "string", "enum": ["auto_memory", "fallback_daily_write"]},
+                        "write_mode": {"type": "string", "enum": [REME_WRITE_MODE_AUTO_MEMORY, REME_WRITE_MODE_FALLBACK_DAILY]},
                         "memory_hint": {"type": "string"},
                     },
                 },
@@ -198,7 +205,7 @@ class SoulMcpServer:
                 evidence["messages"] = arguments.get("messages")
             episode = arguments.get("episode")
             episode_payload = episode if isinstance(episode, dict) else None
-            if str(arguments.get("memory_mode", "soul_reme")) == "legacy":
+            if str(arguments.get("memory_mode", MEMORY_MODE_SOUL_REME)) == MEMORY_MODE_LEGACY:
                 payload = self.api.propose_transition(
                     evidence=evidence,
                     episode=episode_payload,
@@ -260,11 +267,11 @@ class SoulMcpServer:
             evidence = arguments.get("evidence")
             if not isinstance(evidence, dict):
                 raise ValueError("propose_patch requires object argument: evidence")
-            return tool_result(self.api.propose_patch(evidence))
+            return tool_result(dict(self.api.propose_patch(evidence)))
 
         if name == "apply_patch":
             proposal_id = str(arguments["proposal_id"])
-            confirmed_by = str(arguments.get("confirmed_by", "soul-mcp"))
+            confirmed_by = str(arguments.get("confirmed_by", HOST_SOUL_MCP))
             return tool_result(self.api.apply_patch(proposal_id, confirmed_by=confirmed_by))
 
         raise ValueError(f"Unknown tool: {name}")
