@@ -69,7 +69,6 @@ def propose_reme_transition(
         outcome=outcome,
     )
     note_name = safe_reme_note_name(f"episode_{session_id}")
-    actual_write_mode = write_mode
     if write_mode == REME_WRITE_MODE_FALLBACK_DAILY:
         content = render_reme_episode(task=task, outcome=outcome, episode=episode_payload)
         write_result = adapter.daily_write(
@@ -111,7 +110,7 @@ def propose_reme_transition(
         "evidence_refs": refs,
         "reme": {
             "workspace_dir": str(adapter.workspace_dir),
-            "write_mode": actual_write_mode,
+            "write_mode": write_mode,
             "requested_write_mode": write_mode,
             "write_paths": [ref["path"] for ref in reme_write_refs(write_result.metadata)],
             "search_counts": search_result.metadata.get("counts", {}),
@@ -136,7 +135,7 @@ def propose_reme_transition(
                 "memory_mode": MEMORY_MODE_SOUL_REME,
                 "task": compact_transition_summary(task, 160),
                 "patch_id": proposal.get("id"),
-                "reme_write_mode": actual_write_mode,
+                "reme_write_mode": write_mode,
                 "reme_requested_write_mode": write_mode,
                 "evidence_ref_count": len(refs),
                 "trace_path": str(trace_path.relative_to(project_dir)).replace("\\", "/"),
@@ -145,7 +144,7 @@ def propose_reme_transition(
     return {
         "memory_mode": MEMORY_MODE_SOUL_REME,
         "reme_write": write_result.metadata,
-        "reme_write_mode": actual_write_mode,
+        "reme_write_mode": write_mode,
         "reme_requested_write_mode": write_mode,
         "reme_search": search_result.metadata,
         "evidence_refs": refs,

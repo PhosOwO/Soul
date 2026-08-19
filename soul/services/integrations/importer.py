@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from soul.adapters.codex import CodexImportResult, parse_codex_jsonl
-from soul.services.integrations.episodes import append_episode, append_system_event, new_episode_id
+from soul.services.integrations.episodes import append_episode, append_system_event
 
 
 def import_codex_session(path: Path, project_dir: Path | None = None) -> str:
@@ -12,8 +12,8 @@ def import_codex_session(path: Path, project_dir: Path | None = None) -> str:
 
 
 def save_codex_episode(result: CodexImportResult, project_dir: Path | None = None) -> dict:
-    episode_id = new_episode_id()
-    episode = append_episode(project_dir, {**codex_episode_payload(result), "id": episode_id})
+    episode = append_episode(project_dir, codex_episode_payload(result))
+    episode_id = str(episode["id"])
     append_system_event(
         project_dir,
         event_type="episode_imported",

@@ -73,6 +73,7 @@ def append_episode(project_dir: Path | None, episode: dict[str, Any]) -> dict[st
     payload = {
         "created_at": utc_now(),
         "updated_at": utc_now(),
+        "id": new_episode_id(),
         **episode,
         "record_type": "episode",
     }
@@ -90,7 +91,7 @@ def upsert_episode_by_source_path(project_dir: Path | None, episode: dict[str, A
                 existing = candidate
                 break
     if existing is None:
-        return append_episode(project_dir, {"id": new_episode_id(), **episode}), True
+        return append_episode(project_dir, episode), True
 
     updated = {
         **existing,

@@ -114,7 +114,6 @@ def append_queue_event(
 
 def drain_queue(project_dir: Path, *, limit: int = 3) -> dict[str, Any]:
     processed: list[dict[str, Any]] = []
-    skipped_reason = ""
     with queue_lock(project_dir) as acquired:
         if not acquired:
             return {"processed": processed, "locked": True}
@@ -122,7 +121,7 @@ def drain_queue(project_dir: Path, *, limit: int = 3) -> dict[str, Any]:
         for selection in select_runnable_jobs(state, now=datetime.now(UTC), limit=limit):
             result = process_queue_job(project_dir, selection)
             processed.append(result)
-    return {"processed": processed, "locked": False, **({"skipped_reason": skipped_reason} if skipped_reason else {})}
+    return {"processed": processed, "locked": False}
 
 
 def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str, Any]:
