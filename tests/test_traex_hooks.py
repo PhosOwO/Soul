@@ -6,7 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 from shutil import copytree
+from typing import Any
 
+from soul.hooks.runtime import append_hook_run, run_stop_hook
 from soul.services.state import load_state
 
 
@@ -603,7 +605,7 @@ def test_traex_stop_hook_records_evidence_without_blocking() -> None:
     assert record["status"] == "success"
     assert record["queued"] is True
     assert record["job_id"]
-    assert record["worker_started"] is False
+    assert record["background_drain_started"] is False
     queue_after = queue_path.read_text(encoding="utf-8").splitlines()
     jobs = [json.loads(line) for line in queue_after[len(queue_before):]]
     job = next(job for job in jobs if job.get("session_id") == session_id)
@@ -643,6 +645,79 @@ def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path)
     job = json.loads(jobs[-1])
     assert job["source"] == "codex"
     assert job["payload"]["outcome"] == "Use the shared hook runtime for host adapters."
+
+
+def test_hook_heartbeat_write_failure_is_reported(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    def fail_hook_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "status": "success",
+            "host": "traex",
+            "queued": True,
+            "heartbeat_written": False,
+            "heartbeat_error": "permission denied",
+        }
+
+    monkeypatch.setattr("soul.hooks.runtime.append_hook_run", fail_hook_run)
+
+    result = run_stop_hook(
+        {
+            "cwd": str(project),
+            "prompt": "Remember this",
+            "last_assistant_message": "This should become evidence.",
+            "session_id": "heartbeat-failure-session",
+            "hook_event_name": "Stop",
+        },
+        host="traex",
+    )
+
+    assert result.heartbeat["heartbeat_written"] is False
+    assert "Soul queued evidence job" in result.output["systemMessage"]
+    assert "Soul hook heartbeat was not written: permission denied" in result.output["systemMessage"]
+    assert result.output["suppressOutput"] is True
+
+
+def test_stop_hook_uses_thread_name_as_stable_session_fallback(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    result = run_stop_hook(
+        {
+            "cwd": str(project),
+            "prompt": "Remember this",
+            "last_assistant_message": "This should become evidence.",
+            "thread_name": "Queue hardening",
+            "hook_event_name": "Stop",
+        },
+        host="traex",
+    )
+
+    jobs = (project / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
+    job = json.loads(jobs[-1])
+
+    assert result.heartbeat["session_id"].startswith("session-")
+    assert job["session_id"].startswith("session-")
+    assert job["session_id"] != "traex-session"
+
+
+def test_append_hook_run_reports_write_failure(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    (project / ".soul").write_text("not a directory", encoding="utf-8")
+
+    record = append_hook_run(
+        project,
+        {"hook_event_name": "Stop"},
+        {"status": "success", "host": "traex"},
+        default_event="Stop",
+    )
+
+    assert record["heartbeat_written"] is False
+    assert "heartbeat_error" in record
 
 
 def test_traex_hooks_load_soul_from_npm_package_layout(tmp_path: Path) -> None:

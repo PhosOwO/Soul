@@ -88,7 +88,8 @@ def test_context_command_prints_current_state_only(tmp_path: Path) -> None:
     assert "Soul Current State" in result.stdout
     assert "Project: Test Project" in result.stdout
     assert "Open Candidates:" not in result.stdout
-    assert "Legacy Compatibility" not in result.stdout
+    assert "Patch proposals:" not in result.stdout
+    assert "Imported Codex episode:" not in result.stdout
 
 
 def test_codex_user_install_uses_codex_home_without_hardcoded_home(tmp_path: Path) -> None:

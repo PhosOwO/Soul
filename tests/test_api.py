@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+
 import pytest
 
 from soul.api import SoulApi
 from soul.adapters.reme import ReMeJobResult
 from soul.services.state import load_state
+
+
+def datetime_suffix() -> str:
+    return "-" + datetime.now(UTC).strftime("%Y%m%d")
 
 
 def test_soul_api_get_state_returns_injection(tmp_path):
@@ -39,7 +46,7 @@ def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatc
     assert payload["queued"] is True
     assert payload["session_id"] == "dsh-session-1"
     assert payload["turn_id"] == "turn-1"
-    assert payload["worker_started"] is False
+    assert payload["background_drain_started"] is False
     assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     jobs = (tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8")
     assert '"source": "deepseek-harness"' in jobs
@@ -47,6 +54,55 @@ def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatc
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"operation": "enqueue_evidence"' in runs
     assert '"host": "deepseek-harness"' in runs
+
+
+def test_soul_api_enqueue_evidence_filters_reme_write_controls(tmp_path, monkeypatch):
+    load_state(tmp_path, project_name="Demo")
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    SoulApi(tmp_path).enqueue_evidence(
+        evidence={
+            "source": "deepseek-harness",
+            "task": "Capture this turn",
+            "outcome": "Queue it for ReMe processing.",
+            "session_id": "dsh-session-1",
+            "turn_id": "turn-1",
+        },
+        reme={
+            "search_limit": 2,
+            "date": "2026-08-19",
+            "memory_hint": "Keep durable project knowledge.",
+            "write_mode": "fallback_daily_write",
+            "workspace_dir": "/tmp/not-soul-reme",
+        },
+    )
+
+    jobs = (tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8")
+    job = json.loads(jobs.splitlines()[-1])
+
+    assert job["payload"]["reme"] == {
+        "search_limit": 2,
+        "date": "2026-08-19",
+        "memory_hint": "Keep durable project knowledge.",
+    }
+
+
+def test_soul_api_enqueue_evidence_uses_project_scoped_fallback_session(tmp_path, monkeypatch):
+    load_state(tmp_path, project_name="Demo")
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    payload = SoulApi(tmp_path).enqueue_evidence(
+        evidence={
+            "source": "deepseek-harness",
+            "task": "Capture this turn",
+            "outcome": "Queue it for ReMe processing.",
+            "turn_id": "turn-1",
+        },
+    )
+
+    assert payload["session_id"].startswith("soul-deepseek-harness-")
+    assert payload["session_id"].endswith(datetime_suffix())
+    assert payload["session_id"] != "deepseek-harness-session"
 
 
 def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_path, monkeypatch):

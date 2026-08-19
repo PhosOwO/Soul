@@ -9,6 +9,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from soul.services.integrations.sessions import resolve_session_id
+
 
 HookHost = Literal["traex", "codex", "dsh", "generic"]
 HookEvent = Literal["UserPromptSubmit", "Stop"]
@@ -41,17 +43,15 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
             },
             default_event="UserPromptSubmit",
         )
-        return HookResult(
-            output={
-                "suppressOutput": True,
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": build_agent_injection(str(state.get("context", ""))),
-                },
+        output = {
+            "suppressOutput": True,
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": build_agent_injection(str(state.get("context", ""))),
             },
-            project_dir=project_dir,
-            heartbeat=heartbeat,
-        )
+        }
+        add_heartbeat_diagnostic(output, heartbeat)
+        return HookResult(output=output, project_dir=project_dir, heartbeat=heartbeat)
     except Exception as exc:
         heartbeat = append_hook_run(
             project_dir,
@@ -64,9 +64,12 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
             },
             default_event="UserPromptSubmit",
         )
+        message = f"Soul Current State unavailable: {exc}"
+        if heartbeat.get("heartbeat_written") is False:
+            message += f" Hook heartbeat was not written: {heartbeat.get('heartbeat_error')}"
         return HookResult(
             output={
-                "systemMessage": f"Soul Current State unavailable: {exc}",
+                "systemMessage": message,
                 "suppressOutput": False,
             },
             project_dir=project_dir,
@@ -78,7 +81,7 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
     project_dir = project_dir_from_payload(payload)
     prompt = extract_prompt(payload)
     outcome = extract_outcome(payload)
-    session_id = str(payload.get("session_id") or payload.get("turn_id") or f"{host}-session")
+    session_id = resolve_session_id(host=host, project_dir=project_dir, payloads=[payload])
 
     if not (prompt or outcome):
         heartbeat = append_hook_run(
@@ -87,12 +90,15 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
             {
                 "status": "success",
                 "host": host,
+                "session_id": session_id,
                 "queued": False,
                 "reason": "empty_prompt_and_outcome",
             },
             default_event="Stop",
         )
-        return HookResult(output={"suppressOutput": True}, project_dir=project_dir, heartbeat=heartbeat)
+        output = {"suppressOutput": True}
+        add_heartbeat_diagnostic(output, heartbeat)
+        return HookResult(output=output, project_dir=project_dir, heartbeat=heartbeat)
 
     from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 
@@ -128,41 +134,44 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
             {
                 "status": "error",
                 "host": host,
+                "session_id": session_id,
                 "queued": False,
                 "error": compact_error(exc),
             },
             default_event="Stop",
         )
+        message = f"Soul evidence was not recorded: {exc}"
+        if heartbeat.get("heartbeat_written") is False:
+            message += f" Hook heartbeat was not written: {heartbeat.get('heartbeat_error')}"
         return HookResult(
             output={
-                "systemMessage": f"Soul evidence was not recorded: {exc}",
+                "systemMessage": message,
                 "suppressOutput": False,
             },
             project_dir=project_dir,
             heartbeat=heartbeat,
         )
 
-    worker_started = start_queue_drain(project_dir)
+    background_drain_started = start_queue_drain(project_dir)
     heartbeat = append_hook_run(
         project_dir,
         payload,
         {
             "status": "success",
             "host": host,
+            "session_id": session_id,
             "queued": True,
             "job_id": job.get("job_id"),
-            "worker_started": worker_started,
+            "background_drain_started": background_drain_started,
         },
         default_event="Stop",
     )
-    return HookResult(
-        output={
-            "suppressOutput": True,
-            "systemMessage": f"Soul queued evidence job {job.get('job_id', 'unknown')} for background processing.",
-        },
-        project_dir=project_dir,
-        heartbeat=heartbeat,
-    )
+    output = {
+        "suppressOutput": True,
+        "systemMessage": f"Soul queued evidence job {job.get('job_id', 'unknown')} for background processing.",
+    }
+    add_heartbeat_diagnostic(output, heartbeat)
+    return HookResult(output=output, project_dir=project_dir, heartbeat=heartbeat)
 
 
 def read_payload() -> dict[str, Any]:
@@ -246,9 +255,20 @@ def append_hook_run(
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(compact, ensure_ascii=False, sort_keys=True) + "\n")
-    except OSError:
-        pass
-    return compact
+        return {**compact, "heartbeat_written": True}
+    except OSError as exc:
+        return {**compact, "heartbeat_written": False, "heartbeat_error": compact_error(exc)}
+
+
+def add_heartbeat_diagnostic(output: dict[str, Any], heartbeat: dict[str, Any]) -> None:
+    if heartbeat.get("heartbeat_written") is not False:
+        return
+    detail = f"Soul hook heartbeat was not written: {heartbeat.get('heartbeat_error')}"
+    if output.get("systemMessage"):
+        output["systemMessage"] = f"{output['systemMessage']} {detail}"
+    else:
+        output["systemMessage"] = detail
+        output["suppressOutput"] = False
 
 
 def compact_error(exc: Exception) -> str:

@@ -24,6 +24,7 @@ from soul.services.reme.reme_refs import compact_transition_summary, resolve_rem
 from soul.services.reme.reme_transition import propose_reme_transition as propose_reme_transition_service
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
+from soul.services.integrations.sessions import resolve_session_id
 from soul.services.state_core.proposals import apply_patch_proposal, propose_patch
 from soul.services.state_core.state_store import (
     append_patch_proposal,
@@ -98,11 +99,7 @@ class SoulApi:
             or ""
         )
         source = str(evidence_payload.get("source") or HOST_HTTP_API)
-        session_id = str(
-            evidence_payload.get("session_id")
-            or episode_payload.get("session_id")
-            or f"{source}-session"
-        )
+        session_id = resolve_session_id(host=source, project_dir=self.project_dir, payloads=[evidence_payload, episode_payload])
         turn_payload = {
             **evidence_payload,
             "source": source,
@@ -124,8 +121,9 @@ class SoulApi:
             turn_payload["events"] = episode_payload["events"]
         else:
             turn_payload["events"] = []
-        if isinstance(reme, dict):
-            turn_payload["reme"] = reme
+        filtered_reme = enqueue_reme_options(reme)
+        if filtered_reme:
+            turn_payload["reme"] = filtered_reme
         turn_id = str(evidence_payload.get("turn_id") or episode_payload.get("turn_id") or stable_turn_id(turn_payload))
         job = enqueue_turn_evidence(
             self.project_dir,
@@ -134,11 +132,11 @@ class SoulApi:
             turn_id=turn_id,
             payload=turn_payload,
         )
-        worker_started = False
+        background_drain_started = False
         if start_worker:
             from soul.hooks.runtime import start_queue_drain
 
-            worker_started = start_queue_drain(self.project_dir)
+            background_drain_started = start_queue_drain(self.project_dir)
         self.record_integration_run(
             {
                 "host": source,
@@ -149,7 +147,7 @@ class SoulApi:
                 "job_id": job.get("job_id"),
                 "session_id": session_id,
                 "turn_id": turn_id,
-                "worker_started": worker_started,
+                "background_drain_started": background_drain_started,
             }
         )
         return {
@@ -158,7 +156,7 @@ class SoulApi:
             "job_id": job.get("job_id"),
             "session_id": session_id,
             "turn_id": turn_id,
-            "worker_started": worker_started,
+            "background_drain_started": background_drain_started,
             "queue_path": ".soul/state/queue/jobs.jsonl",
         }
 
@@ -283,6 +281,13 @@ def normalized_messages(task: str, outcome: str) -> list[dict[str, str]]:
     if outcome:
         messages.append({"role": "assistant", "content": outcome})
     return messages
+
+
+def enqueue_reme_options(reme: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(reme, dict):
+        return {}
+    allowed = {"search_limit", "date", "memory_hint"}
+    return {key: value for key, value in reme.items() if key in allowed}
 
 
 def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:

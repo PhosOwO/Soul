@@ -7,11 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from soul.api import SoulApi
-from soul.services.shared.constants import (
-    HOST_SOUL_MCP,
-    REME_WRITE_MODE_AUTO_MEMORY,
-    REME_WRITE_MODE_FALLBACK_DAILY,
-)
+from soul.services.shared.constants import HOST_SOUL_MCP
 
 
 SERVER_NAME = "soul-core-mcp"
@@ -54,7 +50,6 @@ TOOLS: list[dict[str, Any]] = [
                     "properties": {
                         "search_limit": {"type": "integer", "minimum": 1},
                         "date": {"type": "string"},
-                        "write_mode": {"type": "string", "enum": [REME_WRITE_MODE_AUTO_MEMORY, REME_WRITE_MODE_FALLBACK_DAILY]},
                         "memory_hint": {"type": "string"},
                     },
                 },

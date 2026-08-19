@@ -33,6 +33,9 @@ def test_mcp_lists_soul_tools(tmp_path: Path) -> None:
     }
     observe_tool = next(tool for tool in tools if tool["name"] == "observe_evidence")
     assert "memory_mode" not in observe_tool["inputSchema"]["properties"]
+    observe_reme = observe_tool["inputSchema"]["properties"]["reme"]["properties"]
+    assert set(observe_reme) == {"search_limit", "date", "memory_hint"}
+    assert "write_mode" not in observe_reme
 
 
 def test_mcp_get_projected_state_returns_tool_content(tmp_path: Path) -> None:
@@ -100,7 +103,7 @@ def test_mcp_observe_evidence_enqueues_reme_processing(
     assert payload["queued"] is True
     assert payload["session_id"] == "codex-session-1"
     assert payload["turn_id"] == "codex-turn-1"
-    assert payload["worker_started"] is False
+    assert payload["background_drain_started"] is False
     assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     jobs = (tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8")
     assert '"source": "test-mcp"' in jobs

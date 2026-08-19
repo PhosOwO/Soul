@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+import json
 
 from soul.services.integrations.queue import (
     EVENT_BLOCKED,
@@ -112,3 +114,27 @@ def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch)
     assert (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     summary = queue_status(tmp_path)
     assert summary.completed == 1
+
+
+def test_queue_jsonl_append_is_safe_for_concurrent_hooks(tmp_path):
+    def enqueue(index: int) -> None:
+        enqueue_turn_evidence(
+            tmp_path,
+            source="test",
+            session_id="s1",
+            turn_id=f"t{index}",
+            payload={"task": f"task {index}", "outcome": f"outcome {index}"},
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(enqueue, range(20)))
+
+    jobs_path = tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl"
+    events_path = tmp_path / ".soul" / "state" / "queue" / "events.jsonl"
+    jobs = [json.loads(line) for line in jobs_path.read_text(encoding="utf-8").splitlines()]
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+
+    assert len(jobs) == 20
+    assert len(events) == 20
+    assert {job["turn_id"] for job in jobs} == {f"t{index}" for index in range(20)}
+    assert {event["event"] for event in events} == {"queued"}

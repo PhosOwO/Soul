@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -28,6 +29,8 @@ EVENT_DEAD_LETTER = "dead_letter"
 MAX_ATTEMPTS = 3
 STALE_STARTED_AFTER_SECONDS = 300
 LOCK_STALE_AFTER_SECONDS = 300
+APPEND_LOCK_TIMEOUT_SECONDS = 5.0
+APPEND_LOCK_POLL_SECONDS = 0.01
 
 QueueEventName = Literal["queued", "started", "completed", "failed", "blocked", "dead_letter"]
 
@@ -399,8 +402,40 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def append_jsonl(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
+    with jsonl_append_lock(path), path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+class jsonl_append_lock:
+    def __init__(self, path: Path) -> None:
+        self.lock_path = path.with_name(path.name + ".lock")
+        self.fd: int | None = None
+
+    def __enter__(self) -> None:
+        deadline = time.monotonic() + APPEND_LOCK_TIMEOUT_SECONDS
+        while True:
+            if self.lock_path.exists() and is_lock_stale(self.lock_path):
+                try:
+                    self.lock_path.unlink()
+                except OSError:
+                    pass
+            try:
+                self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self.fd, json.dumps({"pid": os.getpid(), "created_at": utc_now()}).encode("utf-8"))
+                return
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"Timed out waiting for queue JSONL append lock: {self.lock_path}")
+                time.sleep(APPEND_LOCK_POLL_SECONDS)
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+        try:
+            self.lock_path.unlink()
+        except OSError:
+            return
 
 
 def compact_error(exc: Exception) -> str:
