@@ -11,7 +11,7 @@ from soul.services.integrations.reflection import reflect_episode
 
 @dataclass(slots=True)
 class CodexIngestResult:
-    episode_id: int
+    episode_id: str
     imported: bool
     patch_proposal_ids: list[str]
     summary: str
@@ -20,7 +20,7 @@ class CodexIngestResult:
 def ingest_codex_session(path: Path, project_dir: Path | None = None, max_patches: int = 3) -> CodexIngestResult:
     result = parse_codex_jsonl(path)
     episode, imported = upsert_codex_episode(result, project_dir=project_dir)
-    episode_id = int(episode["id"])
+    episode_id = str(episode["id"])
     patch_proposal_ids = reflect_episode(episode_id, project_dir=project_dir, max_patches=max_patches)
     return CodexIngestResult(
         episode_id=episode_id,

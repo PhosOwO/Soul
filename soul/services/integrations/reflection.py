@@ -39,7 +39,7 @@ class CognitiveDiff:
     patch_proposal_id: str | None = None
 
 
-def reflect_episode(episode_id: int, project_dir: Path | None = None, max_patches: int = 3) -> list[str]:
+def reflect_episode(episode_id: str, project_dir: Path | None = None, max_patches: int = 3) -> list[str]:
     episode = find_episode(project_dir, episode_id)
     if episode is None:
         raise ValueError(f"Episode not found: {episode_id}")

@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from soul.services.state_core.state_store import brain_dir, utc_now
 
@@ -48,20 +49,24 @@ def read_episodes(project_dir: Path | None = None) -> list[dict[str, Any]]:
     return compact_latest_by_id(read_jsonl(episode_paths(project_dir).episodes_path))
 
 
-def find_episode(project_dir: Path | None, episode_id: int) -> dict[str, Any] | None:
+def find_episode(project_dir: Path | None, episode_id: str) -> dict[str, Any] | None:
     for episode in reversed(read_episodes(project_dir)):
-        if int(episode.get("id") or 0) == episode_id:
+        if str(episode.get("id") or "") == str(episode_id):
             return episode
     return None
 
 
-def latest_episode_id(project_dir: Path | None = None) -> int:
-    ids = [int(episode.get("id") or 0) for episode in read_episodes(project_dir)]
-    return max(ids, default=0)
+def resolve_episode_selector(project_dir: Path | None, selector: str) -> dict[str, Any] | None:
+    episodes = read_episodes(project_dir)
+    if selector.isdigit():
+        index = int(selector)
+        if 1 <= index <= len(episodes):
+            return episodes[index - 1]
+    return find_episode(project_dir, selector)
 
 
-def next_episode_id(project_dir: Path | None = None) -> int:
-    return latest_episode_id(project_dir) + 1
+def new_episode_id() -> str:
+    return "episode_" + uuid4().hex
 
 
 def append_episode(project_dir: Path | None, episode: dict[str, Any]) -> dict[str, Any]:
@@ -85,7 +90,7 @@ def upsert_episode_by_source_path(project_dir: Path | None, episode: dict[str, A
                 existing = candidate
                 break
     if existing is None:
-        return append_episode(project_dir, {"id": next_episode_id(project_dir), **episode}), True
+        return append_episode(project_dir, {"id": new_episode_id(), **episode}), True
 
     updated = {
         **existing,
@@ -122,13 +127,13 @@ def read_system_events(project_dir: Path | None = None) -> list[dict[str, Any]]:
 
 
 def compact_latest_by_id(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_id: dict[int, dict[str, Any]] = {}
-    order: list[int] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
     for record in records:
         raw_id = record.get("id")
         if raw_id is None:
             continue
-        episode_id = int(raw_id)
+        episode_id = str(raw_id)
         if episode_id not in by_id:
             order.append(episode_id)
         by_id[episode_id] = record

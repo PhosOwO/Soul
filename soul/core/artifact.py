@@ -10,5 +10,5 @@ class Artifact:
     scope_id: int
     path: str
     kind: str = "file"
-    source_episode_id: int | None = None
+    source_episode_id: str | None = None
     data: dict[str, Any] | None = None

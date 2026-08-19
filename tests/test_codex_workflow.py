@@ -55,8 +55,9 @@ def test_codex_ingest_imports_and_reflects_session(tmp_path: Path) -> None:
     result = run_cli(tmp_path, "codex", "ingest", str(session_path))
     episodes = run_cli(tmp_path, "episode", "list")
 
-    assert "Imported Codex episode: 1" in result.stdout
+    assert "Imported Codex episode: episode_" in result.stdout
     assert "Patch proposals: none" in result.stdout
+    assert "#1\tepisode_" in episodes.stdout
     assert "codex" in episodes.stdout
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"host": "codex:cli"' in runs
@@ -71,8 +72,8 @@ def test_codex_ingest_updates_existing_episode_without_duplicate_patch(tmp_path:
     first = run_cli(tmp_path, "codex", "ingest", str(session_path))
     second = run_cli(tmp_path, "codex", "ingest", str(session_path))
 
-    assert "Imported Codex episode: 1" in first.stdout
-    assert "Updated Codex episode: 1" in second.stdout
+    assert "Imported Codex episode: episode_" in first.stdout
+    assert "Updated Codex episode: episode_" in second.stdout
     assert "Patch proposals: none" in second.stdout
 
 

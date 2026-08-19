@@ -90,6 +90,7 @@ def test_import_codex_session_persists_episode(tmp_path: Path) -> None:
     episode = find_episode(tmp_path, episode_id)
     events = read_system_events(tmp_path)
 
+    assert episode_id.startswith("episode_")
     assert episode is not None
     assert episode["source"] == "codex"
     assert episode["summary"] == "Add Codex Adapter."
@@ -133,6 +134,15 @@ def test_episode_show_command_prints_imported_messages(tmp_path: Path) -> None:
         text=True,
         env=env,
     )
+    listed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "episode", "list"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    episode_id = listed.stdout.split("\t", 2)[1]
     result = subprocess.run(
         [sys.executable, "-m", "soul.cli", "episode", "show", "1", "--limit", "1"],
         cwd=tmp_path,
@@ -141,7 +151,17 @@ def test_episode_show_command_prints_imported_messages(tmp_path: Path) -> None:
         text=True,
         env=env,
     )
+    uuid_result = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "episode", "show", episode_id, "--limit", "1"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
 
+    assert "#1\tepisode_" in listed.stdout
     assert "summary: Show this episode." in result.stdout
+    assert "summary: Show this episode." in uuid_result.stdout
     assert "[1] user" in result.stdout
     assert "Show this episode." in result.stdout

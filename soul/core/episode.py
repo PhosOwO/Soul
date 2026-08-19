@@ -6,7 +6,7 @@ from typing import Any
 
 @dataclass(slots=True)
 class Episode:
-    id: int | None
+    id: str | None
     scope_id: int
     source: str
     summary: str

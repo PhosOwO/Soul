@@ -13,7 +13,7 @@ from typing import Any, Mapping, NoReturn, cast
 
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
-from soul.services.integrations.episodes import find_episode, read_episodes
+from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
     PATCH_STATUS_ACCEPTED,
@@ -237,15 +237,15 @@ def import_codex_command(args: argparse.Namespace) -> None:
 
 
 def list_episodes_command(_: argparse.Namespace) -> None:
-    for episode in read_episodes(Path.cwd()):
+    for index, episode in enumerate(read_episodes(Path.cwd()), start=1):
         print(
-            f"{episode.get('id')}\t{episode.get('source', 'unknown')}\t"
+            f"#{index}\t{episode.get('id')}\t{episode.get('source', 'unknown')}\t"
             f"{episode.get('summary', '')}\t{episode.get('created_at', 'unknown')}"
         )
 
 
 def show_episode_command(args: argparse.Namespace) -> None:
-    episode = find_episode(Path.cwd(), args.episode_id)
+    episode = resolve_episode_selector(Path.cwd(), args.episode_id)
     if episode is None:
         abort(f"Episode not found: {args.episode_id}")
 
@@ -283,11 +283,15 @@ def show_episode_command(args: argparse.Namespace) -> None:
 
 def reflect_episode_command(args: argparse.Namespace) -> None:
     try:
-        patch_proposal_ids = reflect_episode(args.episode_id, project_dir=Path.cwd(), max_patches=args.max_patches)
+        episode = resolve_episode_selector(Path.cwd(), args.episode_id)
+        if episode is None:
+            raise ValueError(f"Episode not found: {args.episode_id}")
+        episode_id = str(episode.get("id") or args.episode_id)
+        patch_proposal_ids = reflect_episode(episode_id, project_dir=Path.cwd(), max_patches=args.max_patches)
     except ValueError as exc:
         abort(str(exc))
 
-    print(f"Reflected episode: {args.episode_id}")
+    print(f"Reflected episode: {episode_id}")
     if patch_proposal_ids:
         print("Patch proposals:")
         for proposal_id in patch_proposal_ids:
@@ -1182,14 +1186,14 @@ def build_parser() -> argparse.ArgumentParser:
     episode_list = episode_subparsers.add_parser("list", help="List episodes.")
     episode_list.set_defaults(func=list_episodes_command)
     episode_show = episode_subparsers.add_parser("show", help="Show one episode.")
-    episode_show.add_argument("episode_id", type=int)
+    episode_show.add_argument("episode_id", help="Episode UUID or list index.")
     episode_show.add_argument("--limit", type=int, default=20, help="Maximum messages to print. Use 0 for all.")
     episode_show.set_defaults(func=show_episode_command)
 
     reflect_parser = subparsers.add_parser("reflect", help="Reflect on imported episodes.")
     reflect_subparsers = reflect_parser.add_subparsers(dest="reflect_command", required=True)
     reflect_episode_parser = reflect_subparsers.add_parser("episode", help="Create State Patch proposals from one episode.")
-    reflect_episode_parser.add_argument("episode_id", type=int)
+    reflect_episode_parser.add_argument("episode_id", help="Episode UUID or list index.")
     reflect_episode_parser.add_argument("--max-patches", dest="max_patches", type=int, default=3)
     reflect_episode_parser.set_defaults(func=reflect_episode_command)
 

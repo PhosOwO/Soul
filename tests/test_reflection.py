@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from soul.services.integrations.episodes import append_episode, next_episode_id, read_system_events
+from soul.services.integrations.episodes import append_episode, new_episode_id, read_system_events
 from soul.services.integrations.reflection import extract_cognitive_diffs, load_reflection_policy, load_reflection_rules, reflect_episode
 from soul.services.state import load_patch_proposals, load_state
 
@@ -51,8 +51,8 @@ def write_session(path: Path, text: str) -> None:
     )
 
 
-def insert_episode(project_dir: Path, messages: list[dict[str, str]], summary: str = "episode") -> int:
-    episode_id = next_episode_id(project_dir)
+def insert_episode(project_dir: Path, messages: list[dict[str, str]], summary: str = "episode") -> str:
+    episode_id = new_episode_id()
     append_episode(
         project_dir,
         {
