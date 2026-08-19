@@ -119,6 +119,9 @@ missing, Soul tries to infer them from readable Codex/TraeX OpenAI-compatible pr
 | ReMe Web/HTTP service | `soul reme start --project-dir .` |
 | Benchmark | `python benchmarks/soulbench_v0/run_soulbench.py` |
 
+On Windows, `soul reme start --project-dir .` starts ReMe with the service window hidden by default. Use
+`--foreground` when you want console logs for debugging.
+
 For TraeX, install Soul into the target project first:
 
 ```bash

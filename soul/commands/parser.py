@@ -528,7 +528,7 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
 
 def reme_start_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
-    code = ReMeCliAdapter(project_dir).start_service(host=args.host, port=args.port)
+    code = ReMeCliAdapter(project_dir).start_service(host=args.host, port=args.port, foreground=args.foreground)
     raise SystemExit(code)
 
 
@@ -1173,6 +1173,11 @@ def build_parser() -> argparse.ArgumentParser:
     reme_start.add_argument("--project-dir", default=".")
     reme_start.add_argument("--host", default="127.0.0.1")
     reme_start.add_argument("--port", type=int, default=2333)
+    reme_start.add_argument(
+        "--foreground",
+        action="store_true",
+        help="Run ReMe in the current console instead of hiding the service window on Windows.",
+    )
     reme_start.set_defaults(func=reme_start_command)
 
     import_parser = subparsers.add_parser("import", help="Import external interaction traces.")

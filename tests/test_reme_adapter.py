@@ -78,7 +78,8 @@ def test_reme_command_uses_local_job_mode(tmp_path, monkeypatch):
     )
 
     assert result.metadata == {"path": "daily/a.md"}
-    assert commands[0][:3] == ["reme", "start", "job=auto_memory"]
+    assert "start" in commands[0]
+    assert "job=auto_memory" in commands[0]
     assert captured_env["LLM_API_KEY"] == "test-key"
     assert captured_env["LLM_BASE_URL"] == "http://example.test/v1"
     assert captured_env["LLM_MODEL_NAME"] == "test-model"
@@ -94,20 +95,63 @@ def test_reme_start_service_uses_server_safe_args(tmp_path, monkeypatch):
 
     monkeypatch.setattr("soul.adapters.reme.subprocess.run", fake_run)
 
-    code = ReMeCliAdapter(tmp_path).start_service(host="127.0.0.1", port=2333)
+    code = ReMeCliAdapter(tmp_path).start_service(host="127.0.0.1", port=2333, foreground=True)
 
     assert code == 0
     command = commands[0]
-    assert command[:2] == ["reme", "start"]
+    assert command[:2] == ["/usr/local/bin/reme", "start"]
     assert "service.host=127.0.0.1" in command
     assert "service.port=2333" in command
     assert "service.show_metadata=true" not in command
+
+
+def test_reme_start_service_hides_window_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr("soul.adapters.reme.os.name", "nt")
+    monkeypatch.setattr("soul.adapters.reme.shutil.which", lambda command: r"C:\Python\Scripts\reme.exe")
+    python_dir = tmp_path / "python"
+    python_dir.mkdir()
+    python = python_dir / "python.exe"
+    pythonw = python_dir / "pythonw.exe"
+    python.write_text("", encoding="utf-8")
+    pythonw.write_text("", encoding="utf-8")
+    monkeypatch.setattr("soul.adapters.reme.sys.executable", str(python))
+    popen_calls = []
+
+    class FakeStartupInfo:
+        def __init__(self):
+            self.dwFlags = 0
+            self.wShowWindow = None
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append((command, kwargs))
+
+        class FakeProcess:
+            pid = 123
+
+        return FakeProcess()
+
+    monkeypatch.setattr("soul.adapters.reme.subprocess.STARTUPINFO", FakeStartupInfo)
+    monkeypatch.setattr("soul.adapters.reme.subprocess.STARTF_USESHOWWINDOW", 1, raising=False)
+    monkeypatch.setattr("soul.adapters.reme.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
+    monkeypatch.setattr("soul.adapters.reme.subprocess.Popen", fake_popen)
+
+    code = ReMeCliAdapter(tmp_path).start_service(host="127.0.0.1", port=2333)
+
+    assert code == 0
+    command, kwargs = popen_calls[0]
+    assert command[:4] == [str(pythonw), "-m", "reme.reme", "start"]
+    assert "log_to_console=false" in command
+    assert kwargs["creationflags"] == 0x08000000
+    assert kwargs["startupinfo"].wShowWindow == 0
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
 
 
 def test_reme_runtime_config_infers_openai_provider_from_host_config(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_BASE_URL", raising=False)
     monkeypatch.delenv("LLM_MODEL_NAME", raising=False)
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
     monkeypatch.setenv("ARK_API_KEY", "ark-key")
     config = tmp_path / ".trae" / "traecli.toml"
     config.parent.mkdir()

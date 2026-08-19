@@ -512,12 +512,16 @@ def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log_path = tmp_path / "reme-args.txt"
-    reme = fake_bin / "reme"
-    reme.write_text(
-        "#!/bin/sh\nprintf '%s\n' \"$@\" > \"$REME_ARG_LOG\"\nexit 0\n",
-        encoding="utf-8",
-    )
-    reme.chmod(0o755)
+    if os.name == "nt":
+        reme = fake_bin / "reme.cmd"
+        reme.write_text("@echo off\r\necho %*>\"%REME_ARG_LOG%\"\r\nexit /b 0\r\n", encoding="utf-8")
+    else:
+        reme = fake_bin / "reme"
+        reme.write_text(
+            "#!/bin/sh\nprintf '%s\n' \"$@\" > \"$REME_ARG_LOG\"\nexit 0\n",
+            encoding="utf-8",
+        )
+        reme.chmod(0o755)
     project = tmp_path / "consumer"
     project.mkdir()
 
@@ -534,6 +538,7 @@ def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:
             "127.0.0.1",
             "--port",
             "2333",
+            "--foreground",
         ],
         cwd=ROOT,
         env={**cli_env(), "PATH": str(fake_bin), "REME_ARG_LOG": str(log_path)},
@@ -544,7 +549,7 @@ def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     args = log_path.read_text(encoding="utf-8")
-    assert "start\n" in args
+    assert "start" in args
     assert f"workspace_dir={project / '.soul' / 'reme'}" in args
     assert "service.host=127.0.0.1" in args
     assert "service.port=2333" in args

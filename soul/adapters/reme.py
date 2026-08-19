@@ -1,13 +1,53 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from soul.services.reme.runtime_config import build_reme_subprocess_env
+
+
+def hidden_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        "startupinfo": startupinfo,
+    }
+
+
+def reme_command(
+    args: list[str],
+    *,
+    cli_path: str | None = None,
+    prefer_module: bool = False,
+    use_pythonw: bool = False,
+) -> list[str]:
+    if os.name != "nt" or not prefer_module:
+        return [cli_path or "reme", *args]
+    executable = reme_python_executable(cli_path=cli_path, use_pythonw=use_pythonw)
+    return [str(executable), "-m", "reme.reme", *args]
+
+
+def reme_python_executable(*, cli_path: str | None, use_pythonw: bool) -> Path:
+    executable_name = "pythonw.exe" if use_pythonw else "python.exe"
+    if cli_path:
+        scripts_dir = Path(cli_path).parent
+        candidate = scripts_dir.parent / executable_name
+        if candidate.exists():
+            return candidate
+    candidate = Path(sys.executable).with_name(executable_name)
+    if candidate.exists():
+        return candidate
+    return Path(sys.executable)
 
 
 @dataclass(frozen=True)
@@ -110,27 +150,48 @@ class ReMeCliAdapter:
     def reindex(self) -> ReMeJobResult:
         return self._run_command("reindex")
 
-    def start_service(self, *, host: str = "127.0.0.1", port: int = 2333) -> int:
+    def start_service(self, *, host: str = "127.0.0.1", port: int = 2333, foreground: bool = False) -> int:
         result = self.check_preflight(create_workspace=True, check_service=False)
         if result.cli_path is None:
             raise RuntimeError(result.message)
-        command = [
-            "reme",
+        log_to_console = "true" if foreground else "false"
+        reme_args = [
             "start",
             f"workspace_dir={self.workspace_dir}",
             "enable_logo=false",
-            "log_to_console=true",
+            f"log_to_console={log_to_console}",
             "log_to_file=false",
             f"service.host={host}",
             f"service.port={port}",
         ]
-        completed = subprocess.run(command, cwd=self.project_dir, env=build_reme_subprocess_env(self.project_dir), check=False)
+        command = reme_command(
+            reme_args,
+            cli_path=result.cli_path,
+            prefer_module=os.name == "nt" and not foreground,
+            use_pythonw=os.name == "nt" and not foreground,
+        )
+        env = build_reme_subprocess_env(self.project_dir)
+        if os.name == "nt" and not foreground:
+            subprocess.Popen(
+                command,
+                cwd=self.project_dir,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                **hidden_subprocess_kwargs(),
+            )
+            return 0
+        run_kwargs = {} if foreground else hidden_subprocess_kwargs()
+        completed = subprocess.run(command, cwd=self.project_dir, env=env, check=False, **run_kwargs)
         return completed.returncode
 
     def _run_job(self, job: str, **kwargs: Any) -> ReMeJobResult:
-        self.preflight()
-        command = [
-            "reme",
+        result = self.check_preflight(create_workspace=True, check_service=False)
+        if not result.ok:
+            raise RuntimeError(result.message)
+        command = reme_command([
             "start",
             f"job={job}",
             f"workspace_dir={self.workspace_dir}",
@@ -138,7 +199,7 @@ class ReMeCliAdapter:
             "log_to_console=false",
             "log_to_file=false",
             "service.show_metadata=true",
-        ]
+        ], cli_path=result.cli_path, prefer_module=True)
         for key, value in kwargs.items():
             command.append(f"{key}={format_reme_cli_value(value)}")
 
@@ -151,6 +212,7 @@ class ReMeCliAdapter:
             errors="replace",
             capture_output=True,
             check=False,
+            **hidden_subprocess_kwargs(),
         )
         answer, metadata = split_answer_metadata(completed.stdout)
         result = ReMeJobResult(
@@ -192,15 +254,14 @@ class ReMeCliAdapter:
             self.workspace_dir.mkdir(parents=True, exist_ok=True)
         if check_service:
             completed = subprocess.run(
-                [
-                    "reme",
+                reme_command([
                     "find_reme",
                     f"workspace_dir={self.workspace_dir}",
                     "enable_logo=false",
                     "log_to_console=false",
                     "log_to_file=false",
                     "service.show_metadata=true",
-                ],
+                ], cli_path=cli_path, prefer_module=True),
                 cwd=self.project_dir,
                 env=build_reme_subprocess_env(self.project_dir),
                 text=True,
@@ -208,6 +269,7 @@ class ReMeCliAdapter:
                 errors="replace",
                 capture_output=True,
                 check=False,
+                **hidden_subprocess_kwargs(),
             )
             if completed.returncode != 0:
                 detail = (completed.stderr or completed.stdout).strip()
