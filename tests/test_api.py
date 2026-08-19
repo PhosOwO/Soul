@@ -18,6 +18,35 @@ def test_soul_api_get_state_returns_injection(tmp_path):
     assert '"operation": "get_state"' in runs
 
 
+def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatch):
+    load_state(tmp_path, project_name="Demo")
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    payload = SoulApi(tmp_path).enqueue_evidence(
+        evidence={
+            "source": "deepseek-harness",
+            "task": "Capture this turn",
+            "outcome": "Queue it for ReMe processing.",
+            "session_id": "dsh-session-1",
+            "turn_id": "turn-1",
+        },
+        reme={"search_limit": 2},
+    )
+
+    assert payload["memory_mode"] == "soul_reme"
+    assert payload["queued"] is True
+    assert payload["session_id"] == "dsh-session-1"
+    assert payload["turn_id"] == "turn-1"
+    assert payload["worker_started"] is False
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
+    jobs = (tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8")
+    assert '"source": "deepseek-harness"' in jobs
+    assert '"search_limit": 2' in jobs
+    runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
+    assert '"operation": "enqueue_evidence"' in runs
+    assert '"host": "deepseek-harness"' in runs
+
+
 def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_path, monkeypatch):
     load_state(tmp_path, project_name="Demo")
 

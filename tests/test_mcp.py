@@ -61,50 +61,12 @@ def test_mcp_get_projected_state_returns_tool_content(tmp_path: Path) -> None:
     assert '"operation": "get_state"' in runs
 
 
-def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
+def test_mcp_observe_evidence_enqueues_reme_processing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     load_state(tmp_path, project_name="Demo")
-
-    class FakeReMeAdapter:
-        def __init__(self, project_dir: Path, workspace_dir: Path | None = None) -> None:
-            self.workspace_dir = workspace_dir
-
-        def auto_memory(self, **kwargs: Any) -> ReMeJobResult:
-            return ReMeJobResult(
-                job="auto_memory",
-                command=["reme", "auto_memory"],
-                returncode=0,
-                stdout="",
-                stderr="",
-                answer="",
-                metadata={"path": "daily/2026-08-17/codex_session.md"},
-            )
-
-        def search(self, **kwargs: Any) -> ReMeJobResult:
-            return ReMeJobResult(
-                job="search",
-                command=["reme", "start", "job=search"],
-                returncode=0,
-                stdout="",
-                stderr="",
-                answer="",
-                metadata={
-                    "counts": {"vector": 0, "keyword": 1, "returned": 1},
-                    "results": [
-                        {
-                            "id": "chunk-1",
-                            "path": "daily/2026-08-17/codex_session.md",
-                            "start_line": 3,
-                            "end_line": 9,
-                            "score": 1.5,
-                        }
-                    ],
-                },
-            )
-
-    monkeypatch.setattr("soul.api.ReMeCliAdapter", FakeReMeAdapter)
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
 
     response = require_response(
         SoulMcpServer(tmp_path).handle(
@@ -118,6 +80,8 @@ def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
                         "task": "Review evidence",
                         "summary": "A new observation should be reviewed before becoming accepted state.",
                         "source": "test-mcp",
+                        "session_id": "codex-session-1",
+                        "turn_id": "codex-turn-1",
                         "messages": [
                             {"role": "user", "content": "Review evidence"},
                             {
@@ -133,17 +97,17 @@ def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
 
     payload = response["result"]["structuredContent"]
     assert payload["memory_mode"] == "soul_reme"
-    assert payload["reme_write_mode"] == "auto_memory"
-    assert payload["evidence_refs"][0]["path"] == "daily/2026-08-17/codex_session.md"
-    assert payload["patch_proposal"]["status"] == "proposed"
-    assert payload["patch_proposal"]["review_recommendation"] == "reject"
-    assert payload["patch_proposal"]["knowledge_points"] == []
-    assert payload["patch_proposal"]["evidence"]["source"] == "test-mcp:reme"
-    assert payload["patch_proposal"]["evidence"]["memory_owner"] == "reme"
-    assert payload["patch_proposal"]["evidence"]["content"] == "ReMe evidence refs attached; ordinary memory body remains in ReMe."
+    assert payload["queued"] is True
+    assert payload["session_id"] == "codex-session-1"
+    assert payload["turn_id"] == "codex-turn-1"
+    assert payload["worker_started"] is False
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
+    jobs = (tmp_path / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8")
+    assert '"source": "test-mcp"' in jobs
+    assert '"codex-turn-1"' in jobs
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"host": "test-mcp"' in runs
-    assert '"operation": "propose_reme_transition"' in runs
+    assert '"operation": "enqueue_evidence"' in runs
 
 
 def test_mcp_reme_evidence_and_memory_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

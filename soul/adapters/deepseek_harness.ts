@@ -64,7 +64,7 @@ export class DeepSeekHarnessSoulPlugin {
     const outcome = input.outcome ?? latestAssistantText(input.messages) ?? "";
     const body = {
       evidence: {
-        source: "deepseek-harness:reme",
+        source: "deepseek-harness",
         task,
         outcome,
         event_count: input.events?.length ?? 0,
@@ -75,7 +75,7 @@ export class DeepSeekHarnessSoulPlugin {
         events: input.events ?? [],
       },
     };
-    return postJson(`${this.baseUrl}/reme/transition/propose`, {
+    return postJson(`${this.baseUrl}/evidence/enqueue`, {
       ...body,
       reme: {
         search_limit: this.remeSearchLimit,

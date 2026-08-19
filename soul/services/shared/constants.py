@@ -47,6 +47,7 @@ HOST_SOUL_HTTP_API = "soul-http-api"
 HOST_SOUL_MCP = "soul-mcp"
 
 OP_GET_STATE = "get_state"
+OP_ENQUEUE_EVIDENCE = "enqueue_evidence"
 OP_PROPOSE_REME_TRANSITION = "propose_reme_transition"
 OP_READ_EVIDENCE = "read_evidence"
 OP_TRACE_EVIDENCE = "trace_evidence"

@@ -34,8 +34,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "observe_evidence",
         "description": (
-            "Submit turn evidence to ReMe and receive a Soul State Patch proposal with evidence refs. "
-            "The patch is not applied automatically."
+            "Enqueue turn evidence for non-blocking ReMe processing. "
+            "Background processing may later create a Soul State Patch proposal."
         ),
         "inputSchema": {
             "type": "object",
@@ -48,6 +48,7 @@ TOOLS: list[dict[str, Any]] = [
                 "messages": {"type": "array", "items": {"type": "object"}},
                 "episode": {"type": "object"},
                 "session_id": {"type": "string"},
+                "turn_id": {"type": "string"},
                 "reme": {
                     "type": "object",
                     "properties": {
@@ -194,12 +195,14 @@ class SoulMcpServer:
             }
             if arguments.get("session_id"):
                 evidence["session_id"] = arguments.get("session_id")
+            if arguments.get("turn_id"):
+                evidence["turn_id"] = arguments.get("turn_id")
             if isinstance(arguments.get("messages"), list):
                 evidence["messages"] = arguments.get("messages")
             episode = arguments.get("episode")
             episode_payload = episode if isinstance(episode, dict) else None
             reme = arguments.get("reme")
-            payload = self.api.propose_reme_transition(
+            payload = self.api.enqueue_evidence(
                 evidence=evidence,
                 episode=episode_payload,
                 reme=reme if isinstance(reme, dict) else None,

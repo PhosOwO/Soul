@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from soul.adapters.reme import ReMeJobResult
 from soul.services.integrations.queue import (
     EVENT_BLOCKED,
     EVENT_FAILED,
     append_queue_event,
+    drain_queue,
     enqueue_turn_evidence,
     queue_status,
     replay_queue_state,
@@ -82,3 +84,48 @@ def test_queue_retry_waits_for_next_run_at(tmp_path):
     assert selected == []
     summary = queue_status(tmp_path)
     assert summary.failed_retryable == 1
+
+
+def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch):
+    class FakeReMeAdapter:
+        def __init__(self, project_dir, workspace_dir=None):
+            self.workspace_dir = workspace_dir
+
+        def auto_memory(self, **kwargs):
+            return ReMeJobResult(
+                job="auto_memory",
+                command=["reme", "auto_memory"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                answer="",
+                metadata={"path": "daily/2026-08-19/queued.md"},
+            )
+
+        def search(self, **kwargs):
+            return ReMeJobResult(
+                job="search",
+                command=["reme", "search"],
+                returncode=0,
+                stdout="",
+                stderr="",
+                answer="",
+                metadata={"counts": {"returned": 0}, "results": []},
+            )
+
+    monkeypatch.setattr("soul.services.reme.reme_transition.ReMeCliAdapter", FakeReMeAdapter)
+    enqueue_turn_evidence(
+        tmp_path,
+        source="codex:mcp",
+        session_id="s1",
+        turn_id="t1",
+        payload={"task": "Remember queue contract", "outcome": "Queue drain calls ReMe."},
+    )
+
+    result = drain_queue(tmp_path, limit=1)
+
+    assert result["locked"] is False
+    assert result["processed"][0]["status"] == "completed"
+    assert (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
+    summary = queue_status(tmp_path)
+    assert summary.completed == 1

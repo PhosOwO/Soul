@@ -77,6 +77,8 @@ By default Soul uses `.soul/reme/` as the project-local ReMe workspace. ReMe-bac
 | Codex MCP command | `soul-mcp --project-dir .` |
 | Codex verification | `soul codex doctor --project-dir .` |
 | DeepSeek Harness API | `soul-api --project-dir . --port 8765` |
+| DeepSeek Harness setup | `soul dsh install --project-dir .` |
+| DeepSeek Harness launch | `dsh web --patch .soul/dsh/soul.patch.yml` |
 | DeepSeek Harness verification | `soul dsh doctor --project-dir .` |
 | TraeX project setup | `./node_modules/.bin/soul traex install --init` |
 | TraeX user setup | `soul traex install --scope user --project-dir . --init` |
@@ -105,6 +107,14 @@ soul traex doctor --project-dir .
 ```
 
 The same rule applies to Codex and DeepSeek Harness: use the relevant `doctor` command to verify recent Soul execution, not just MCP/API visibility. Codex setup writes `[mcp_servers.soul]` to `$CODEX_HOME/config.toml` or the current user's default Codex config.
+
+For DeepSeek Harness, keep the Soul API running while DSH runs:
+
+```bash
+soul-api --project-dir . --port 8765
+soul dsh install --project-dir .
+dsh web --patch .soul/dsh/soul.patch.yml
+```
 
 ## More
 

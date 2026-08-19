@@ -195,10 +195,10 @@ def test_dsh_doctor_reports_recent_http_runs(tmp_path: Path) -> None:
                 json.dumps(
                     {
                         "created_at": "2026-08-17T00:01:00+00:00",
-                        "host": "deepseek-harness:reme",
-                        "operation": "propose_reme_transition",
+                        "host": "deepseek-harness",
+                        "operation": "enqueue_evidence",
                         "status": "success",
-                        "patch_id": "patch-1",
+                        "job_id": "turn-1",
                     }
                 ),
             ]
@@ -213,6 +213,31 @@ def test_dsh_doctor_reports_recent_http_runs(tmp_path: Path) -> None:
     assert "DSH before-turn/state:" in result.stdout
     assert "DSH after-turn/evidence:" in result.stdout
     assert "DeepSeek Harness has executed Soul recently" in result.stdout
+
+
+def test_dsh_install_writes_patch_overlay(tmp_path: Path) -> None:
+    result = run_cli(
+        tmp_path,
+        "dsh",
+        "install",
+        "--project-dir",
+        str(tmp_path),
+        "--api-url",
+        "http://127.0.0.1:9876",
+        "--search-limit",
+        "7",
+    )
+
+    patch = tmp_path / ".soul" / "dsh" / "soul.patch.yml"
+    text = patch.read_text(encoding="utf-8")
+
+    assert "Installed Soul DeepSeek Harness patch" in result.stdout
+    assert "dsh web --patch" in result.stdout
+    assert "- id: soul" in text
+    assert "dsh_plugin.mjs" in text
+    assert 'baseUrl: "http://127.0.0.1:9876"' in text
+    assert f'projectDir: "{tmp_path}"' in text
+    assert "searchLimit: 7" in text
 
 
 def test_init_defaults_project_name_to_current_directory(tmp_path: Path) -> None:

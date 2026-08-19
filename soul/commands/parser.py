@@ -370,7 +370,7 @@ def dsh_doctor_command(args: argparse.Namespace) -> None:
     print(f"- project: {project_dir}")
     print(f"- api: {args.api_url} ({api_status})")
     print_integration_run("DSH before-turn/state", latest_operation_run(dsh_runs, "get_state"))
-    print_integration_run("DSH after-turn/evidence", latest_operation_run(dsh_runs, "propose"))
+    print_integration_run("DSH after-turn/evidence", latest_operation_run(dsh_runs, "enqueue"))
     print_file_summary("ReMe evidence", newest_files(project_dir / ".soul" / "reme", limit=3), project_dir)
     print_file_summary("Soul traces", newest_files(project_dir / ".soul" / "traces", limit=3), project_dir)
     print_file_summary("Patch proposals", newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1), project_dir)
@@ -378,6 +378,27 @@ def dsh_doctor_command(args: argparse.Namespace) -> None:
         print("- status: DeepSeek Harness has executed Soul recently.")
     else:
         print("- status: API availability is not enough; no DeepSeek Harness Soul execution heartbeat was found.")
+
+
+def dsh_install_command(args: argparse.Namespace) -> None:
+    project_dir = Path(args.project_dir).expanduser().resolve()
+    output = Path(args.output).expanduser()
+    if not output.is_absolute():
+        output = project_dir / output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    patch = build_dsh_patch(
+        project_dir=project_dir,
+        package_root=package_root(),
+        api_url=args.api_url,
+        search_limit=args.search_limit,
+    )
+    output.write_text(patch, encoding="utf-8")
+    print(f"Installed Soul DeepSeek Harness patch: {output}")
+    print("Use it with:")
+    print(f"  dsh web --patch {shell_quote(str(output))}")
+    print("")
+    print("Make sure the Soul API is running:")
+    print(f"  soul-api --project-dir {shell_quote(str(project_dir))} --port {api_port(args.api_url)}")
 
 
 def traex_install_command(args: argparse.Namespace) -> None:
@@ -643,6 +664,35 @@ def build_traex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
             "",
         ]
     )
+
+
+def build_dsh_patch(*, project_dir: Path, package_root: Path, api_url: str, search_limit: int) -> str:
+    plugin_path = package_root / "soul" / "adapters" / "dsh_plugin.mjs"
+    return "\n".join(
+        [
+            "# SoulKit managed DeepSeek Harness patch.",
+            "# Pass this file to DSH with: dsh web --patch <this-file>",
+            "- insert:",
+            "    - id: soul",
+            f"      name: {quote_yaml_string(command_path(plugin_path))}",
+            "      config:",
+            f"        baseUrl: {quote_yaml_string(api_url)}",
+            f"        projectDir: {quote_yaml_string(str(project_dir))}",
+            f"        searchLimit: {int(search_limit)}",
+            "",
+        ]
+    )
+
+
+def quote_yaml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def api_port(api_url: str) -> str:
+    parsed = api_url.rsplit(":", 1)
+    if len(parsed) == 2 and parsed[1].isdigit():
+        return parsed[1]
+    return "8765"
 
 
 def command_path(value: str | Path) -> str:
@@ -1006,6 +1056,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     dsh_parser = subparsers.add_parser("dsh", help="DeepSeek Harness integration helpers.")
     dsh_subparsers = dsh_parser.add_subparsers(dest="dsh_command", required=True)
+    dsh_install = dsh_subparsers.add_parser("install", help="Write a DSH patch that loads Soul evidence hooks.")
+    dsh_install.add_argument("--project-dir", default=".")
+    dsh_install.add_argument("--output", default=".soul/dsh/soul.patch.yml")
+    dsh_install.add_argument("--api-url", default="http://127.0.0.1:8765")
+    dsh_install.add_argument("--search-limit", type=int, default=5)
+    dsh_install.set_defaults(func=dsh_install_command)
     dsh_doctor = dsh_subparsers.add_parser("doctor", help="Check whether DeepSeek Harness has actually used Soul.")
     dsh_doctor.add_argument("--project-dir", default=".")
     dsh_doctor.add_argument("--api-url", default="http://127.0.0.1:8765")

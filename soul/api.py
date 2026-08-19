@@ -13,6 +13,7 @@ from soul.services.shared.constants import (
     HOST_SOUL_HTTP_API,
     MEMORY_MODE_SOUL_REME,
     OP_CONSOLIDATE_MEMORY,
+    OP_ENQUEUE_EVIDENCE,
     OP_GET_PROACTIVE_TOPICS,
     OP_GET_STATE,
     OP_READ_EVIDENCE,
@@ -22,6 +23,7 @@ from soul.services.shared.constants import (
 from soul.services.reme.reme_refs import compact_transition_summary, resolve_reme_workspace
 from soul.services.reme.reme_transition import propose_reme_transition as propose_reme_transition_service
 from soul.services.integrations.integration_runs import append_integration_run
+from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.state_core.proposals import apply_patch_proposal, propose_patch
 from soul.services.state_core.state_store import (
     append_patch_proposal,
@@ -77,6 +79,88 @@ class SoulApi:
             record_integration_run=self.record_integration_run,
             adapter_class=ReMeCliAdapter,
         )
+
+    def enqueue_evidence(
+        self,
+        evidence: dict[str, Any] | None = None,
+        episode: dict[str, Any] | None = None,
+        reme: dict[str, Any] | None = None,
+        *,
+        start_worker: bool = True,
+    ) -> dict[str, Any]:
+        evidence_payload = dict(evidence or {})
+        episode_payload = episode if isinstance(episode, dict) else {}
+        task = str(evidence_payload.get("task") or episode_payload.get("task") or "")
+        outcome = str(
+            evidence_payload.get("outcome")
+            or evidence_payload.get("summary")
+            or episode_payload.get("outcome")
+            or ""
+        )
+        source = str(evidence_payload.get("source") or HOST_HTTP_API)
+        session_id = str(
+            evidence_payload.get("session_id")
+            or episode_payload.get("session_id")
+            or f"{source}-session"
+        )
+        turn_payload = {
+            **evidence_payload,
+            "source": source,
+            "task": task,
+            "outcome": outcome,
+            "summary": str(evidence_payload.get("summary") or outcome),
+            "session_id": session_id,
+        }
+        if isinstance(evidence_payload.get("messages"), list):
+            messages = evidence_payload["messages"]
+        elif isinstance(episode_payload.get("messages"), list):
+            messages = episode_payload["messages"]
+        else:
+            messages = normalized_messages(task, outcome)
+        turn_payload["messages"] = messages
+        if isinstance(evidence_payload.get("events"), list):
+            turn_payload["events"] = evidence_payload["events"]
+        elif isinstance(episode_payload.get("events"), list):
+            turn_payload["events"] = episode_payload["events"]
+        else:
+            turn_payload["events"] = []
+        if isinstance(reme, dict):
+            turn_payload["reme"] = reme
+        turn_id = str(evidence_payload.get("turn_id") or episode_payload.get("turn_id") or stable_turn_id(turn_payload))
+        job = enqueue_turn_evidence(
+            self.project_dir,
+            source=source,
+            session_id=session_id,
+            turn_id=turn_id,
+            payload=turn_payload,
+        )
+        worker_started = False
+        if start_worker:
+            from soul.hooks.runtime import start_queue_drain
+
+            worker_started = start_queue_drain(self.project_dir)
+        self.record_integration_run(
+            {
+                "host": source,
+                "operation": OP_ENQUEUE_EVIDENCE,
+                "status": STATUS_SUCCESS,
+                "memory_mode": MEMORY_MODE_SOUL_REME,
+                "task": compact_transition_summary(task, 160),
+                "job_id": job.get("job_id"),
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "worker_started": worker_started,
+            }
+        )
+        return {
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "queued": True,
+            "job_id": job.get("job_id"),
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "worker_started": worker_started,
+            "queue_path": ".soul/state/queue/jobs.jsonl",
+        }
 
     def record_integration_run(self, record: dict[str, Any]) -> None:
         try:
@@ -192,6 +276,15 @@ def build_agent_injection(context: str) -> str:
     )
 
 
+def normalized_messages(task: str, outcome: str) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    if task:
+        messages.append({"role": "user", "content": task})
+    if outcome:
+        messages.append({"role": "assistant", "content": outcome})
+    return messages
+
+
 def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
     class SoulApiHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -212,6 +305,15 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             try:
                 payload = self.read_json()
+                if self.path == "/evidence/enqueue":
+                    self.write_json(
+                        api.enqueue_evidence(
+                            evidence=payload.get("evidence"),
+                            episode=payload.get("episode"),
+                            reme=payload.get("reme"),
+                        )
+                    )
+                    return
                 if self.path == "/reme/transition/propose":
                     self.write_json(
                         api.propose_reme_transition(
