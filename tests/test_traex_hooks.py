@@ -64,7 +64,14 @@ def test_traex_install_copies_templates_and_initializes_project(tmp_path: Path) 
             "Consumer",
         ],
         cwd=ROOT,
-        env={**cli_env(), "PATH": ""},
+        env={
+            **cli_env(),
+            "HOME": str(tmp_path / "home"),
+            "PATH": "",
+            "LLM_API_KEY": "",
+            "LLM_BASE_URL": "",
+            "LLM_MODEL_NAME": "",
+        },
         text=True,
         capture_output=True,
         check=True,
@@ -250,6 +257,98 @@ def test_reme_doctor_reports_missing_cli_without_failing(tmp_path: Path) -> None
     assert "ReMe preflight:" in completed.stdout
     assert "cli: not found" in completed.stdout
     assert "install ReMe" in completed.stdout
+    assert "ReMe auto_memory config:" in completed.stdout
+    assert "LLM_API_KEY: missing" in completed.stdout
+    assert "missing environment for ReMe auto_memory" in completed.stdout
+
+
+def test_reme_doctor_reads_project_env_for_auto_memory_config(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    (project / ".env").write_text(
+        "\n".join(
+            [
+                "LLM_API_KEY=test-key",
+                "LLM_BASE_URL=http://example.test/v1",
+                "LLM_MODEL_NAME=test-model",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "reme", "doctor", "--project-dir", str(project)],
+        cwd=ROOT,
+        env={
+            **cli_env(),
+            "HOME": str(tmp_path / "home"),
+            "PATH": "",
+            "LLM_API_KEY": "",
+            "LLM_BASE_URL": "",
+            "LLM_MODEL_NAME": "",
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "ReMe auto_memory config:" in completed.stdout
+    assert f"env file: {project / '.env'}" in completed.stdout
+    assert "LLM_API_KEY: set (.env " in completed.stdout
+    assert "LLM_BASE_URL: set (.env " in completed.stdout
+    assert "LLM_MODEL_NAME: set (.env " in completed.stdout
+    assert "status: ok" in completed.stdout
+
+
+def test_reme_init_config_creates_global_template(tmp_path: Path) -> None:
+    soul_home = tmp_path / "soul-home"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "reme", "init-config"],
+        cwd=ROOT,
+        env={**cli_env(), "SOUL_HOME": str(soul_home)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    config = soul_home / ".env"
+    assert "Created ReMe auto_memory config template" in completed.stdout
+    assert str(config) in completed.stdout
+    text = config.read_text(encoding="utf-8")
+    assert "LLM_API_KEY=sk-your-api-key" in text
+    assert "LLM_BASE_URL=https://api.deepseek.com/v1" in text
+    assert "LLM_MODEL_NAME=deepseek-chat" in text
+    assert "# LLM_BASE_URL=https://ark-cn-beijing.bytedance.net/api/v3" in text
+
+
+def test_reme_init_config_creates_project_template(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "reme",
+            "init-config",
+            "--scope",
+            "project",
+            "--project-dir",
+            str(project),
+        ],
+        cwd=ROOT,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    config = project / ".env"
+    assert "Created ReMe auto_memory config template" in completed.stdout
+    assert str(config) in completed.stdout
+    assert "LLM_MODEL_NAME=deepseek-chat" in config.read_text(encoding="utf-8")
 
 
 def test_reme_doctor_reports_stopped_service_without_failing(tmp_path: Path) -> None:
@@ -262,7 +361,13 @@ def test_reme_doctor_reports_stopped_service_without_failing(tmp_path: Path) -> 
     completed = subprocess.run(
         [sys.executable, "-m", "soul.cli", "reme", "doctor", "--project-dir", str(tmp_path)],
         cwd=ROOT,
-        env={**cli_env(), "PATH": str(fake_bin)},
+        env={
+            **cli_env(),
+            "PATH": str(fake_bin),
+            "LLM_API_KEY": "test-key",
+            "LLM_BASE_URL": "http://example.test/v1",
+            "LLM_MODEL_NAME": "test-model",
+        },
         text=True,
         capture_output=True,
         check=True,
@@ -272,6 +377,10 @@ def test_reme_doctor_reports_stopped_service_without_failing(tmp_path: Path) -> 
     assert "cli: " in completed.stdout
     assert "service: not available" in completed.stdout
     assert "reme start" in completed.stdout
+    assert "ReMe auto_memory config:" in completed.stdout
+    assert "LLM_API_KEY: set" in completed.stdout
+    assert "LLM_BASE_URL: set" in completed.stdout
+    assert "LLM_MODEL_NAME: set" in completed.stdout
 
 
 def test_reme_doctor_warns_when_workspace_files_are_at_project_root(tmp_path: Path) -> None:

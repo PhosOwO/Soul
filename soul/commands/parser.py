@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+from importlib import resources
 from urllib.error import URLError
 from urllib.request import urlopen
 from pathlib import Path
@@ -19,12 +20,16 @@ from soul.services.shared.constants import (
     PATCH_STATUS_APPLIED,
     PATCH_STATUS_PROPOSED,
     PATCH_STATUS_REJECTED,
+    REME_LLM_API_KEY_ENV,
+    REME_LLM_BASE_URL_ENV,
+    REME_LLM_MODEL_NAME_ENV,
 )
 from soul.services.integrations.integration_runs import append_integration_run, latest_matching_run, read_integration_runs
 from soul.services.integrations.codex_workflow import ingest_codex_session
 from soul.services.integrations.importer import import_codex_session
 from soul.services.integrations.queue import drain_queue, queue_status
 from soul.services.integrations.reflection import reflect_episode
+from soul.services.reme.runtime_config import resolve_reme_runtime_config, soul_home
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
 from soul.services.state_core.state_render import format_state_context
 from soul.services.state_core.state_store import (
@@ -523,6 +528,32 @@ def reme_start_command(args: argparse.Namespace) -> None:
     raise SystemExit(code)
 
 
+def reme_init_config_command(args: argparse.Namespace) -> None:
+    project_dir = Path(args.project_dir).expanduser().resolve()
+    config_path = reme_config_template_path(project_dir, scope=args.scope)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    if config_path.exists() and not args.force:
+        print(f"ReMe auto_memory config already exists: {config_path}")
+        print("Edit this file and fill in LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL_NAME.")
+        print("Use --force to recreate the template.")
+        return
+    config_path.write_text(reme_env_template(), encoding="utf-8")
+    print(f"Created ReMe auto_memory config template: {config_path}")
+    print("Edit this file and fill in LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL_NAME.")
+    if args.scope == "global":
+        print("Project .env files can override this global config when needed.")
+
+
+def reme_config_template_path(project_dir: Path, *, scope: str) -> Path:
+    if scope == "project":
+        return project_dir / ".env"
+    return soul_home() / ".env"
+
+
+def reme_env_template() -> str:
+    return resources.files("soul.templates").joinpath("reme.env").read_text(encoding="utf-8")
+
+
 def print_reme_preflight(project_dir: Path, *, create_workspace: bool) -> bool:
     result = ReMeCliAdapter(project_dir).check_preflight(create_workspace=create_workspace, check_service=True)
     print("ReMe preflight:")
@@ -538,7 +569,28 @@ def print_reme_preflight(project_dir: Path, *, create_workspace: bool) -> bool:
             print("- action: install ReMe or make sure the `reme` executable is on PATH.")
         else:
             print("- action: start ReMe with `reme start` before expecting Soul evidence writes.")
+    print_reme_auto_memory_env(project_dir)
     return result.ok
+
+
+def print_reme_auto_memory_env(project_dir: Path) -> bool:
+    required = [REME_LLM_API_KEY_ENV, REME_LLM_BASE_URL_ENV, REME_LLM_MODEL_NAME_ENV]
+    runtime_config = resolve_reme_runtime_config(project_dir)
+    missing = runtime_config.missing
+    print("ReMe auto_memory config:")
+    for env_file in runtime_config.env_files:
+        print(f"- env file: {env_file}")
+    for name in required:
+        source = runtime_config.sources.get(name, "not found")
+        status = "set" if runtime_config.values.get(name) else "missing"
+        print(f"- {name}: {status} ({source})")
+    if missing:
+        joined = ", ".join(missing)
+        print(f"- status: missing environment for ReMe auto_memory: {joined}")
+        print("- action: run `soul reme init-config --scope global`, then fill in the generated file.")
+        return False
+    print("- status: ok")
+    return True
 
 
 def print_reme_workspace_layout_warnings(project_dir: Path) -> None:
@@ -1100,6 +1152,19 @@ def build_parser() -> argparse.ArgumentParser:
     reme_doctor.add_argument("--project-dir", default=".")
     reme_doctor.add_argument("--create-workspace", action="store_true", help="Create .soul/reme when ReMe is available.")
     reme_doctor.set_defaults(func=reme_doctor_command)
+    reme_init_config = reme_subparsers.add_parser(
+        "init-config",
+        help="Create a local template for ReMe auto_memory LLM configuration.",
+    )
+    reme_init_config.add_argument("--project-dir", default=".")
+    reme_init_config.add_argument(
+        "--scope",
+        choices=["global", "project"],
+        default="global",
+        help="Write $SOUL_HOME/.env by default, or project .env with --scope project.",
+    )
+    reme_init_config.add_argument("--force", action="store_true", help="Overwrite an existing config template.")
+    reme_init_config.set_defaults(func=reme_init_config_command)
     reme_start = reme_subparsers.add_parser("start", help="Start the ReMe HTTP/Web service for this project.")
     reme_start.add_argument("--project-dir", default=".")
     reme_start.add_argument("--host", default="127.0.0.1")

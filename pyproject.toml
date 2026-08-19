@@ -19,7 +19,7 @@ soul-mcp = "soul.mcp:main"
 include = ["soul*"]
 
 [tool.setuptools.package-data]
-soul = ["schemas/*.json", "policies/*.json"]
+soul = ["schemas/*.json", "policies/*.json", "templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

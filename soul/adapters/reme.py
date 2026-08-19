@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from soul.services.reme.runtime_config import build_reme_subprocess_env
+
 
 @dataclass(frozen=True)
 class ReMeJobResult:
@@ -122,7 +124,7 @@ class ReMeCliAdapter:
             f"service.host={host}",
             f"service.port={port}",
         ]
-        completed = subprocess.run(command, cwd=self.project_dir, check=False)
+        completed = subprocess.run(command, cwd=self.project_dir, env=build_reme_subprocess_env(self.project_dir), check=False)
         return completed.returncode
 
     def _run_job(self, job: str, **kwargs: Any) -> ReMeJobResult:
@@ -143,6 +145,7 @@ class ReMeCliAdapter:
         completed = subprocess.run(
             command,
             cwd=self.project_dir,
+            env=build_reme_subprocess_env(self.project_dir),
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -199,6 +202,7 @@ class ReMeCliAdapter:
                     "service.show_metadata=true",
                 ],
                 cwd=self.project_dir,
+                env=build_reme_subprocess_env(self.project_dir),
                 text=True,
                 encoding="utf-8",
                 errors="replace",

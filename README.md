@@ -69,6 +69,39 @@ ReMe owns durable memory and evidence files. Soul consumes ReMe outputs, stores 
 
 By default Soul uses `.soul/reme/` as the project-local ReMe workspace. ReMe-backed writes use ReMe CLI capabilities such as `auto_memory`, `read`, `traverse`, `auto_dream`, and `proactive`.
 
+`auto_memory` uses the model configuration visible to the Soul process. For a global setup, create a Soul env template:
+
+macOS/Linux:
+
+```bash
+soul reme init-config --scope global
+```
+
+Windows PowerShell:
+
+```powershell
+soul reme init-config --scope global
+```
+
+Set `SOUL_HOME` to use a custom cross-platform location; Soul will read `$SOUL_HOME/.env`.
+Fill the generated file with:
+
+```dotenv
+# DeepSeek example:
+LLM_API_KEY=sk-your-api-key
+LLM_BASE_URL=https://api.deepseek.com/v1
+LLM_MODEL_NAME=deepseek-chat
+
+# OpenAI-compatible / Ark example:
+# LLM_API_KEY=your-api-key
+# LLM_BASE_URL=https://ark-cn-beijing.bytedance.net/api/v3
+# LLM_MODEL_NAME=your-endpoint-id
+```
+
+Run `soul reme doctor --project-dir . --create-workspace` to check the ReMe CLI, `.soul/reme` workspace, and visible `auto_memory` environment.
+Project `.env` files can override the global values when a project needs a different model. If these values are still
+missing, Soul tries to infer them from readable Codex/TraeX OpenAI-compatible provider config.
+
 ## Integrations
 
 | Use case | Command |

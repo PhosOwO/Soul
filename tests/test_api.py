@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from soul.api import SoulApi
 from soul.adapters.reme import ReMeJobResult
 from soul.services.state import load_state
@@ -217,7 +219,9 @@ def test_soul_api_reme_transition_can_use_fallback_daily_write(tmp_path, monkeyp
     assert {"type": "reme_file", "path": "daily/2026-08-16/fallback.md"} in payload["evidence_refs"]
 
 
-def test_soul_api_reme_transition_falls_back_when_auto_memory_needs_credentials(tmp_path, monkeypatch):
+def test_soul_api_reme_transition_does_not_implicitly_fallback_when_auto_memory_needs_credentials(
+    tmp_path, monkeypatch
+):
     load_state(tmp_path, project_name="Demo")
 
     calls = []
@@ -256,16 +260,14 @@ def test_soul_api_reme_transition_falls_back_when_auto_memory_needs_credentials(
 
     monkeypatch.setattr("soul.api.ReMeCliAdapter", FakeReMeAdapter)
 
-    payload = SoulApi(tmp_path).propose_reme_transition(
-        evidence={"task": "Fallback from auto_memory", "summary": "Use daily write"},
-        reme={"write_mode": "auto_memory"},
-    )
+    with pytest.raises(RuntimeError, match="Missing credentials"):
+        SoulApi(tmp_path).propose_reme_transition(
+            evidence={"task": "Fallback from auto_memory", "summary": "Use daily write"},
+            reme={"write_mode": "auto_memory"},
+        )
 
-    assert [call[0] for call in calls] == ["auto_memory", "daily_write", "search"]
-    assert payload["reme_write_mode"] == "fallback_daily_write"
-    assert payload["reme_requested_write_mode"] == "auto_memory"
-    assert payload["patch_proposal"]["evidence"]["reme"]["requested_write_mode"] == "auto_memory"
-    assert {"type": "reme_file", "path": "daily/2026-08-17/fallback.md"} in payload["evidence_refs"]
+    assert [call[0] for call in calls] == ["auto_memory"]
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
 
 
 def test_soul_api_reme_read_trace_consolidate_and_proactive(tmp_path, monkeypatch):

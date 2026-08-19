@@ -86,35 +86,15 @@ def propose_reme_transition(
             },
         )
     elif write_mode == REME_WRITE_MODE_AUTO_MEMORY:
-        try:
-            write_result = adapter.auto_memory(
-                session_id=safe_reme_session_id(session_id),
-                messages=messages,
-                memory_hint=str(
-                    reme_config.get("memory_hint")
-                    or "Preserve durable project decisions, constraints, procedures, user preferences, and evidence links."
-                ),
-                date=str(reme_config.get("date") or ""),
-            )
-        except RuntimeError as exc:
-            if not should_fallback_reme_write(exc, reme_config):
-                raise
-            actual_write_mode = REME_WRITE_MODE_FALLBACK_DAILY
-            content = render_reme_episode(task=task, outcome=outcome, episode=episode_payload)
-            write_result = adapter.daily_write(
-                name=note_name,
-                description="Agent episode captured as ReMe memory for Soul evidence",
-                session_id=safe_reme_session_id(session_id),
-                content=content,
-                date=str(reme_config.get("date") or ""),
-                metadata={
-                    "source": source,
-                    "memory_owner": MEMORY_OWNER_REME,
-                    "state_owner": STATE_OWNER_SOUL,
-                    "memory_mode": MEMORY_MODE_SOUL_REME,
-                    "fallback_reason": compact_transition_summary(str(exc)),
-                },
-            )
+        write_result = adapter.auto_memory(
+            session_id=safe_reme_session_id(session_id),
+            messages=messages,
+            memory_hint=str(
+                reme_config.get("memory_hint")
+                or "Preserve durable project decisions, constraints, procedures, user preferences, and evidence links."
+            ),
+            date=str(reme_config.get("date") or ""),
+        )
     else:
         raise ValueError(f"Unsupported ReMe write_mode: {write_mode}")
     search_query = " ".join(part for part in [task, outcome] if part).strip() or note_name
@@ -216,18 +196,3 @@ def normalized_reme_messages(
         {"name": "user", "role": "user", "content": task or "No task text was provided."},
         {"name": "assistant", "role": "assistant", "content": outcome or "No outcome text was provided."},
     ]
-
-
-def should_fallback_reme_write(exc: RuntimeError, reme_config: dict[str, Any]) -> bool:
-    if reme_config.get(REME_WRITE_MODE_FALLBACK_DAILY) is False:
-        return False
-    text = str(exc).lower()
-    fallback_markers = [
-        "missing credentials",
-        "api_key",
-        "openai_api_key",
-        "workload_identity",
-        "model",
-        "exhausted all",
-    ]
-    return any(marker in text for marker in fallback_markers)

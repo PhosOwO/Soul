@@ -18,8 +18,10 @@
     "docs/",
     "soul/**/*.py",
     "soul/**/*.ts",
+    "soul/**/*.mjs",
     "soul/policies/",
     "soul/schemas/",
+    "soul/templates/",
     "README.md",
     "pyproject.toml"
   ],
