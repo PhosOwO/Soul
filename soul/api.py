@@ -7,18 +7,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from soul.adapters.agent import SoulAgentAdapter
 from soul.adapters.reme import ReMeCliAdapter
 from soul.services.shared.constants import (
-    HOST_DEEPSEEK_HARNESS,
     HOST_HTTP_API,
     HOST_SOUL_HTTP_API,
-    MEMORY_MODE_LEGACY,
     MEMORY_MODE_SOUL_REME,
     OP_CONSOLIDATE_MEMORY,
     OP_GET_PROACTIVE_TOPICS,
     OP_GET_STATE,
-    OP_PROPOSE_TRANSITION,
     OP_READ_EVIDENCE,
     OP_TRACE_EVIDENCE,
     STATUS_SUCCESS,
@@ -35,7 +31,6 @@ from soul.services.state_core.state_store import (
     save_state,
 )
 from soul.services.shared.state_types import PatchProposal
-from soul.storage.database import connect, default_db_path, init_database
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -67,46 +62,6 @@ class SoulApi:
             }
         )
         return payload
-
-    def propose_transition(
-        self,
-        evidence: dict[str, Any] | None = None,
-        episode: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        evidence_payload = dict(evidence or {})
-        episode_payload = episode or {}
-        task = str(evidence_payload.get("task") or episode_payload.get("task") or "")
-        outcome = str(
-            evidence_payload.get("outcome")
-            or evidence_payload.get("summary")
-            or episode_payload.get("outcome")
-            or ""
-        )
-
-        with self.connect_legacy_database() as conn:
-            result = SoulAgentAdapter(conn, self.project_dir).after_task(
-                task=task or "DeepSeek Harness turn",
-                outcome=outcome or "No outcome text was provided.",
-                evidence={
-                    **evidence_payload,
-                    "source": evidence_payload.get("source", HOST_DEEPSEEK_HARNESS),
-                    "episode": episode_payload,
-                },
-            )
-        self.record_integration_run(
-            {
-                "host": str(evidence_payload.get("source") or HOST_DEEPSEEK_HARNESS),
-                "operation": OP_PROPOSE_TRANSITION,
-                "status": STATUS_SUCCESS,
-                "memory_mode": MEMORY_MODE_LEGACY,
-                "task": compact_transition_summary(task, 160),
-                "episode_id": result.get("episode_id"),
-                "patch_id": (result.get("patch_proposal") or {}).get("id")
-                if isinstance(result.get("patch_proposal"), dict)
-                else None,
-            }
-        )
-        return result
 
     def propose_reme_transition(
         self,
@@ -227,13 +182,6 @@ class SoulApi:
         save_state(next_state, self.project_dir)
         return {"state": next_state, "applied_patch": proposal}
 
-    def connect_legacy_database(self):
-        db_path = default_db_path(self.project_dir)
-        conn = connect(db_path)
-        init_database(conn, project_name=self.project_dir.name)
-        return conn
-
-
 def build_agent_injection(context: str) -> str:
     return (
         "[Soul Current State]\n"
@@ -264,14 +212,6 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             try:
                 payload = self.read_json()
-                if self.path == "/transition/propose":
-                    self.write_json(
-                        api.propose_transition(
-                            evidence=payload.get("evidence"),
-                            episode=payload.get("episode"),
-                        )
-                    )
-                    return
                 if self.path == "/reme/transition/propose":
                     self.write_json(
                         api.propose_reme_transition(

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from soul.api import SoulApi
 from soul.adapters.reme import ReMeJobResult
-from soul.storage.database import connect, default_db_path, init_database
+from soul.services.state import load_state
 
 
 def test_soul_api_get_state_returns_injection(tmp_path):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     payload = SoulApi(tmp_path).get_state(task="下一步怎么做？", source="deepseek-harness")
 
@@ -19,25 +18,8 @@ def test_soul_api_get_state_returns_injection(tmp_path):
     assert '"operation": "get_state"' in runs
 
 
-def test_soul_api_propose_transition_records_episode_and_patch(tmp_path):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
-
-    payload = SoulApi(tmp_path).propose_transition(
-        evidence={"task": "Review new evidence", "summary": "A new observation needs review before it changes accepted state."},
-        episode={"events": [{"type": "assistant_answer", "durable": True}]},
-    )
-
-    assert payload["episode_id"] > 0
-    assert payload["patch_proposal"]["status"] == "proposed"
-    assert "title" in payload["patch_proposal"]
-    assert "knowledge_points" in payload["patch_proposal"]
-    assert "why_remember" in payload["patch_proposal"]
-
-
 def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_path, monkeypatch):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     captured_auto_memory = {}
 
@@ -167,8 +149,7 @@ def test_soul_api_reme_transition_ignores_external_workspace_for_writes(tmp_path
 
 
 def test_soul_api_reme_transition_can_use_fallback_daily_write(tmp_path, monkeypatch):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     class FakeReMeAdapter:
         def __init__(self, project_dir, workspace_dir=None):
@@ -208,8 +189,7 @@ def test_soul_api_reme_transition_can_use_fallback_daily_write(tmp_path, monkeyp
 
 
 def test_soul_api_reme_transition_falls_back_when_auto_memory_needs_credentials(tmp_path, monkeypatch):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     calls = []
 
@@ -260,8 +240,7 @@ def test_soul_api_reme_transition_falls_back_when_auto_memory_needs_credentials(
 
 
 def test_soul_api_reme_read_trace_consolidate_and_proactive(tmp_path, monkeypatch):
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     calls = []
 

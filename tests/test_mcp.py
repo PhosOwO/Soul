@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from soul.adapters.reme import ReMeJobResult
 from soul.mcp import SoulMcpServer
-from soul.storage.database import connect, default_db_path, init_database
+from soul.services.state import load_state
 
 
 def require_response(response: dict[str, Any] | None) -> dict[str, Any]:
@@ -16,8 +16,7 @@ def require_response(response: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def test_mcp_lists_soul_tools(tmp_path: Path) -> None:
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     response = require_response(SoulMcpServer(tmp_path).handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
 
@@ -32,11 +31,12 @@ def test_mcp_lists_soul_tools(tmp_path: Path) -> None:
         "propose_patch",
         "apply_patch",
     }
+    observe_tool = next(tool for tool in tools if tool["name"] == "observe_evidence")
+    assert "memory_mode" not in observe_tool["inputSchema"]["properties"]
 
 
 def test_mcp_get_projected_state_returns_tool_content(tmp_path: Path) -> None:
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     response = require_response(
         SoulMcpServer(tmp_path).handle(
@@ -65,8 +65,7 @@ def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     class FakeReMeAdapter:
         def __init__(self, project_dir: Path, workspace_dir: Path | None = None) -> None:
@@ -147,37 +146,8 @@ def test_mcp_observe_evidence_writes_reme_and_proposes_refs_only_patch(
     assert '"operation": "propose_reme_transition"' in runs
 
 
-def test_mcp_observe_evidence_legacy_mode_bypasses_reme(tmp_path: Path) -> None:
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
-
-    response = require_response(
-        SoulMcpServer(tmp_path).handle(
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {
-                    "name": "observe_evidence",
-                    "arguments": {
-                        "task": "Review evidence",
-                        "summary": "A new observation should be reviewed before becoming accepted state.",
-                        "source": "test-mcp",
-                        "memory_mode": "legacy",
-                    },
-                },
-            }
-        )
-    )
-
-    payload = response["result"]["structuredContent"]
-    assert "memory_mode" not in payload
-    assert payload["patch_proposal"]["status"] == "proposed"
-
-
 def test_mcp_reme_evidence_and_memory_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with connect(default_db_path(tmp_path)) as conn:
-        init_database(conn, project_name="Demo")
+    load_state(tmp_path, project_name="Demo")
 
     class FakeReMeAdapter:
         def __init__(self, project_dir: Path, workspace_dir: Path | None = None) -> None:

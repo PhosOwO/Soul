@@ -9,8 +9,6 @@ from typing import Any
 from soul.api import SoulApi
 from soul.services.shared.constants import (
     HOST_SOUL_MCP,
-    MEMORY_MODE_LEGACY,
-    MEMORY_MODE_SOUL_REME,
     REME_WRITE_MODE_AUTO_MEMORY,
     REME_WRITE_MODE_FALLBACK_DAILY,
 )
@@ -50,11 +48,6 @@ TOOLS: list[dict[str, Any]] = [
                 "messages": {"type": "array", "items": {"type": "object"}},
                 "episode": {"type": "object"},
                 "session_id": {"type": "string"},
-                "memory_mode": {
-                    "type": "string",
-                    "enum": [MEMORY_MODE_SOUL_REME, MEMORY_MODE_LEGACY],
-                    "description": "Defaults to soul_reme. Use legacy only to bypass ReMe and write evidence directly to Soul state flow.",
-                },
                 "reme": {
                     "type": "object",
                     "properties": {
@@ -205,18 +198,12 @@ class SoulMcpServer:
                 evidence["messages"] = arguments.get("messages")
             episode = arguments.get("episode")
             episode_payload = episode if isinstance(episode, dict) else None
-            if str(arguments.get("memory_mode", MEMORY_MODE_SOUL_REME)) == MEMORY_MODE_LEGACY:
-                payload = self.api.propose_transition(
-                    evidence=evidence,
-                    episode=episode_payload,
-                )
-            else:
-                reme = arguments.get("reme")
-                payload = self.api.propose_reme_transition(
-                    evidence=evidence,
-                    episode=episode_payload,
-                    reme=reme if isinstance(reme, dict) else None,
-                )
+            reme = arguments.get("reme")
+            payload = self.api.propose_reme_transition(
+                evidence=evidence,
+                episode=episode_payload,
+                reme=reme if isinstance(reme, dict) else None,
+            )
             return tool_result(payload)
 
         if name == "read_evidence":

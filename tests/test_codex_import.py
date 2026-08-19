@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from soul.adapters.codex import parse_codex_jsonl
+from soul.services.integrations.episodes import find_episode, read_system_events
 from soul.services.integrations.importer import import_codex_session
-from soul.storage.database import connect, init_database
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -86,16 +86,15 @@ def test_import_codex_session_persists_episode(tmp_path: Path) -> None:
         ],
     )
 
-    db_path = tmp_path / ".soul" / "state" / "soul.db"
-    with connect(db_path) as conn:
-        init_database(conn, project_name="Test Project")
-        episode_id = import_codex_session(conn, session_path)
-        episode = conn.execute("SELECT * FROM episodes WHERE id = ?", (episode_id,)).fetchone()
-        event = conn.execute("SELECT * FROM system_events WHERE type = 'episode_imported'").fetchone()
+    episode_id = import_codex_session(session_path, project_dir=tmp_path)
+    episode = find_episode(tmp_path, episode_id)
+    events = read_system_events(tmp_path)
 
+    assert episode is not None
     assert episode["source"] == "codex"
     assert episode["summary"] == "Add Codex Adapter."
-    assert event is not None
+    assert any(event.get("type") == "episode_imported" for event in events)
+    assert not (tmp_path / ".soul" / "state" / "soul.db").exists()
 
 
 def test_episode_show_command_prints_imported_messages(tmp_path: Path) -> None:

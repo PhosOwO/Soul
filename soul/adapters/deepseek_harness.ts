@@ -16,7 +16,7 @@ export type SoulHarnessOptions = {
   baseUrl?: string;
   scope?: string;
   stateLimit?: number;
-  memoryMode?: "legacy" | "soul_reme" | "off";
+  memoryMode?: "soul_reme" | "off";
   remeSearchLimit?: number;
 };
 
@@ -26,7 +26,7 @@ export class DeepSeekHarnessSoulPlugin {
   private readonly baseUrl: string;
   private readonly scope: string;
   private readonly stateLimit: number;
-  private readonly memoryMode: "legacy" | "soul_reme" | "off";
+  private readonly memoryMode: "soul_reme" | "off";
   private readonly remeSearchLimit: number;
 
   constructor(options: SoulHarnessOptions = {}) {
@@ -64,7 +64,7 @@ export class DeepSeekHarnessSoulPlugin {
     const outcome = input.outcome ?? latestAssistantText(input.messages) ?? "";
     const body = {
       evidence: {
-        source: this.memoryMode === "soul_reme" ? "deepseek-harness:reme" : "deepseek-harness",
+        source: "deepseek-harness:reme",
         task,
         outcome,
         event_count: input.events?.length ?? 0,
@@ -75,15 +75,12 @@ export class DeepSeekHarnessSoulPlugin {
         events: input.events ?? [],
       },
     };
-    if (this.memoryMode === "soul_reme") {
-      return postJson(`${this.baseUrl}/reme/transition/propose`, {
-        ...body,
-        reme: {
-          search_limit: this.remeSearchLimit,
-        },
-      });
-    }
-    return postJson(`${this.baseUrl}/transition/propose`, body);
+    return postJson(`${this.baseUrl}/reme/transition/propose`, {
+      ...body,
+      reme: {
+        search_limit: this.remeSearchLimit,
+      },
+    });
   }
 }
 
@@ -123,11 +120,11 @@ function latestRoleText(messages: SoulHookInput["messages"], role: string): stri
   return message?.content ?? message?.text;
 }
 
-function parseMemoryMode(raw: string | undefined): "legacy" | "soul_reme" | "off" {
-  if (raw === "soul_reme" || raw === "off" || raw === "legacy") {
+function parseMemoryMode(raw: string | undefined): "soul_reme" | "off" {
+  if (raw === "soul_reme" || raw === "off") {
     return raw;
   }
-  return "legacy";
+  return "soul_reme";
 }
 
 async function readJson(url: URL): Promise<Record<string, any>> {

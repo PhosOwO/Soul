@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
+from soul.services.integrations.episodes import append_episode, next_episode_id, read_system_events
 from soul.services.integrations.reflection import extract_cognitive_diffs, load_reflection_policy, load_reflection_rules, reflect_episode
-from soul.services.state import load_patch_proposals
-from soul.storage.database import connect, dumps_json, init_database, require_lastrowid
+from soul.services.state import load_patch_proposals, load_state
 
 
 def cli_env() -> dict[str, str]:
@@ -52,23 +51,20 @@ def write_session(path: Path, text: str) -> None:
     )
 
 
-def require_row(row: sqlite3.Row | None) -> sqlite3.Row:
-    assert row is not None
-    return row
-
-
-def insert_episode(conn: sqlite3.Connection, messages: list[dict[str, str]], summary: str = "episode") -> int:
-    scope_row = require_row(conn.execute("SELECT id FROM scopes ORDER BY id LIMIT 1").fetchone())
-    scope_id = scope_row["id"]
-    cursor = conn.execute(
-        """
-        INSERT INTO episodes (scope_id, source, summary, content_json, metadata_json)
-        VALUES (?, 'codex', ?, ?, ?)
-        """,
-        (scope_id, summary, dumps_json(messages), dumps_json({})),
+def insert_episode(project_dir: Path, messages: list[dict[str, str]], summary: str = "episode") -> int:
+    episode_id = next_episode_id(project_dir)
+    append_episode(
+        project_dir,
+        {
+            "id": episode_id,
+            "source": "codex",
+            "source_path": None,
+            "summary": summary,
+            "messages": messages,
+            "metadata": {},
+        },
     )
-    conn.commit()
-    return require_lastrowid(cursor)
+    return episode_id
 
 
 def test_load_reflection_rules_are_state_patch_signals() -> None:
@@ -118,7 +114,6 @@ def test_extract_diffs_keeps_lightweight_state_patch_proposals() -> None:
 
 
 def test_reflect_episode_records_no_change_as_system_event(tmp_path: Path) -> None:
-    db_path = tmp_path / ".soul" / "state" / "soul.db"
     messages = [
         {
             "role": "user",
@@ -127,22 +122,17 @@ def test_reflect_episode_records_no_change_as_system_event(tmp_path: Path) -> No
         }
     ]
 
-    with connect(db_path) as conn:
-        init_database(conn, project_name="Test Project")
-        episode_id = insert_episode(conn, messages, "task")
-
-        proposal_ids = reflect_episode(conn, episode_id)
-        cognitive_event = conn.execute("SELECT * FROM cognitive_events WHERE type = 'episode_reflected'").fetchone()
-        system_event = conn.execute("SELECT * FROM system_events WHERE type = 'episode_reflected'").fetchone()
+    load_state(tmp_path, project_name="Test Project")
+    episode_id = insert_episode(tmp_path, messages, "task")
+    proposal_ids = reflect_episode(episode_id, project_dir=tmp_path)
+    events = read_system_events(tmp_path)
 
     assert proposal_ids == []
-    assert cognitive_event is None
-    assert system_event is not None
-    assert "NO_CHANGE" in require_row(system_event)["data_json"]
+    assert any(event.get("type") == "episode_reflected" and "NO_CHANGE" in event.get("data", {}).get("diff_types", []) for event in events)
+    assert not (tmp_path / ".soul" / "state" / "soul.db").exists()
 
 
 def test_reflect_episode_writes_patch_proposal(tmp_path: Path, monkeypatch) -> None:
-    db_path = tmp_path / ".soul" / "state" / "soul.db"
     messages = [
         {
             "role": "user",
@@ -152,16 +142,16 @@ def test_reflect_episode_writes_patch_proposal(tmp_path: Path, monkeypatch) -> N
     ]
     monkeypatch.chdir(tmp_path)
 
-    with connect(db_path) as conn:
-        init_database(conn, project_name="Test Project")
-        episode_id = insert_episode(conn, messages, "decision")
-        proposal_ids = reflect_episode(conn, episode_id)
+    load_state(tmp_path, project_name="Test Project")
+    episode_id = insert_episode(tmp_path, messages, "decision")
+    proposal_ids = reflect_episode(episode_id, project_dir=tmp_path)
 
     proposals = load_patch_proposals(tmp_path)
 
     assert len(proposal_ids) == 1
     assert proposals[-1]["id"] == proposal_ids[0]
     assert proposals[-1]["status"] == "proposed"
+    assert not (tmp_path / ".soul" / "state" / "soul.db").exists()
 
 
 def test_cli_reflect_outputs_patch_proposal_not_candidate(tmp_path: Path) -> None:

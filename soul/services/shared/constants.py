@@ -9,7 +9,6 @@ NEEDS_REVIEW = "needs_review"
 
 REME_DIR_NAME = REME_NAME
 
-MEMORY_MODE_LEGACY = "legacy"
 MEMORY_MODE_SOUL_REME = "soul_reme"
 
 MEMORY_OWNER_REME = REME_NAME
@@ -48,7 +47,6 @@ HOST_SOUL_HTTP_API = "soul-http-api"
 HOST_SOUL_MCP = "soul-mcp"
 
 OP_GET_STATE = "get_state"
-OP_PROPOSE_TRANSITION = "propose_transition"
 OP_PROPOSE_REME_TRANSITION = "propose_reme_transition"
 OP_READ_EVIDENCE = "read_evidence"
 OP_TRACE_EVIDENCE = "trace_evidence"

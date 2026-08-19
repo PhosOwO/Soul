@@ -1,1 +1,0 @@
-"""SQLite storage for Soul."""

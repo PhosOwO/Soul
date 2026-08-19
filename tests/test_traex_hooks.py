@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from shutil import copytree
 
-from soul.storage.database import connect, default_db_path, init_database
+from soul.services.state import load_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,7 +77,7 @@ def test_traex_install_copies_templates_and_initializes_project(tmp_path: Path) 
     assert (project / ".trae" / "hooks" / "soul_stop.py").is_file()
     assert (project / ".soul" / "state" / "state.json").is_file()
     assert (project / ".soul" / "state" / "STATE.md").is_file()
-    assert not default_db_path(project).exists()
+    assert not (project / ".soul" / "state" / "soul.db").exists()
     assert "ReMe preflight:" in completed.stdout
     assert "cli: not found" in completed.stdout
 
@@ -139,7 +139,7 @@ def test_traex_user_install_uses_trae_home_without_hardcoded_home(tmp_path: Path
     assert str(project) in text
     assert (project / ".soul" / "state" / "state.json").is_file()
     assert (project / ".soul" / "state" / "STATE.md").is_file()
-    assert not default_db_path(project).exists()
+    assert not (project / ".soul" / "state" / "soul.db").exists()
 
 
 def test_traex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> None:
@@ -443,8 +443,7 @@ def test_reme_start_uses_project_workspace(tmp_path: Path) -> None:
 def test_traex_user_prompt_submit_hook_injects_soul_state() -> None:
     heartbeat = ROOT / ".soul" / "state" / "hook_runs.jsonl"
     before = heartbeat.read_text(encoding="utf-8").splitlines() if heartbeat.exists() else []
-    with connect(default_db_path(ROOT)) as conn:
-        init_database(conn, project_name="SoulKit")
+    load_state(ROOT, project_name="SoulKit")
 
     turn_id = "test-user-prompt-heartbeat"
     output = run_hook(
@@ -544,8 +543,7 @@ def test_traex_hooks_load_soul_from_npm_package_layout(tmp_path: Path) -> None:
     package_root = project / "node_modules" / "@soulkit" / "soul"
     copytree(ROOT / "soul", package_root / "soul")
 
-    with connect(default_db_path(project)) as conn:
-        init_database(conn, project_name="Consumer")
+    load_state(project, project_name="Consumer")
 
     output = run_hook_from_cwd(
         project,

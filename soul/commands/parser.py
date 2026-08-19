@@ -12,6 +12,7 @@ from typing import Any, Mapping, NoReturn, cast
 
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
+from soul.services.integrations.episodes import find_episode, read_episodes
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
     PATCH_STATUS_ACCEPTED,
@@ -34,7 +35,6 @@ from soul.services.state_core.state_store import (
     save_state,
 )
 from soul.services.shared.text import compact_text
-from soul.storage.database import connect, default_db_path, init_database
 
 
 def init_command(args: argparse.Namespace) -> None:
@@ -211,18 +211,6 @@ def agent_before_task_command(args: argparse.Namespace) -> None:
     print(load_state_markdown(limit=args.limit, task=args.task))
 
 
-def agent_after_task_command(args: argparse.Namespace) -> None:
-    from soul.adapters.agent import SoulAgentAdapter
-
-    with connect_legacy_database() as conn:
-        payload = SoulAgentAdapter(conn).after_task(
-            args.task,
-            args.outcome,
-            evidence={"source": args.source, "content": args.evidence or args.outcome},
-        )
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
-
-
 def api_serve_command(args: argparse.Namespace) -> None:
     from soul.api import serve
 
@@ -234,38 +222,41 @@ def import_codex_command(args: argparse.Namespace) -> None:
     if not path.exists():
         abort(f"Codex session file not found: {path}")
 
-    with connect_legacy_database() as conn:
-        episode_id = import_codex_session(conn, path)
-        row = conn.execute("SELECT summary, metadata_json FROM episodes WHERE id = ?", (episode_id,)).fetchone()
+    episode_id = import_codex_session(path, project_dir=Path.cwd())
+    episode = find_episode(Path.cwd(), episode_id)
+    if episode is None:
+        abort(f"Episode not found after import: {episode_id}")
     print(f"Imported Codex episode: {episode_id}")
-    print(f"Summary: {row['summary']}")
-    print(f"Metadata: {row['metadata_json']}")
+    print(f"Summary: {episode.get('summary', '')}")
+    print(f"Metadata: {json.dumps(episode.get('metadata', {}), ensure_ascii=False)}")
 
 
 def list_episodes_command(_: argparse.Namespace) -> None:
-    with connect_legacy_database() as conn:
-        rows = conn.execute(
-            "SELECT id, source, summary, created_at FROM episodes ORDER BY id"
-        ).fetchall()
-    for row in rows:
-        print(f"{row['id']}\t{row['source']}\t{row['summary']}\t{row['created_at']}")
+    for episode in read_episodes(Path.cwd()):
+        print(
+            f"{episode.get('id')}\t{episode.get('source', 'unknown')}\t"
+            f"{episode.get('summary', '')}\t{episode.get('created_at', 'unknown')}"
+        )
 
 
 def show_episode_command(args: argparse.Namespace) -> None:
-    with connect_legacy_database() as conn:
-        row = conn.execute("SELECT * FROM episodes WHERE id = ?", (args.episode_id,)).fetchone()
-    if row is None:
+    episode = find_episode(Path.cwd(), args.episode_id)
+    if episode is None:
         abort(f"Episode not found: {args.episode_id}")
 
-    messages = json.loads(row["content_json"])
-    metadata = json.loads(row["metadata_json"])
+    messages = episode.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+    metadata = episode.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
     limit = max(args.limit, 0)
 
-    print(f"id: {row['id']}")
-    print(f"source: {row['source']}")
-    print(f"summary: {row['summary']}")
-    print(f"source_path: {row['source_path']}")
-    print(f"created_at: {row['created_at']}")
+    print(f"id: {episode.get('id')}")
+    print(f"source: {episode.get('source', 'unknown')}")
+    print(f"summary: {episode.get('summary', '')}")
+    print(f"source_path: {episode.get('source_path')}")
+    print(f"created_at: {episode.get('created_at', 'unknown')}")
     print(f"metadata: {json.dumps(metadata, ensure_ascii=False)}")
     print("")
     print(f"Messages: {len(messages)}")
@@ -286,11 +277,10 @@ def show_episode_command(args: argparse.Namespace) -> None:
 
 
 def reflect_episode_command(args: argparse.Namespace) -> None:
-    with connect_legacy_database() as conn:
-        try:
-            patch_proposal_ids = reflect_episode(conn, args.episode_id, max_patches=args.max_patches)
-        except ValueError as exc:
-            abort(str(exc))
+    try:
+        patch_proposal_ids = reflect_episode(args.episode_id, project_dir=Path.cwd(), max_patches=args.max_patches)
+    except ValueError as exc:
+        abort(str(exc))
 
     print(f"Reflected episode: {args.episode_id}")
     if patch_proposal_ids:
@@ -306,8 +296,7 @@ def codex_ingest_command(args: argparse.Namespace) -> None:
     if not path.exists():
         abort(f"Codex session file not found: {path}")
 
-    with connect_legacy_database() as conn:
-        result = ingest_codex_session(conn, path, max_patches=args.max_patches)
+    result = ingest_codex_session(path, project_dir=Path.cwd(), max_patches=args.max_patches)
 
     action = "Imported" if result.imported else "Updated"
     print(f"{action} Codex episode: {result.episode_id}")
@@ -347,7 +336,7 @@ def codex_doctor_command(args: argparse.Namespace) -> None:
     project_config = project_dir / ".codex" / "config.toml"
     runs = read_integration_runs(project_dir, limit=50)
     codex_run = latest_matching_run(runs, host_prefix="codex:mcp")
-    legacy_codex_episode = latest_episode_summary(project_dir, source="codex")
+    imported_codex_episode = latest_episode_summary(project_dir, source="codex")
 
     print("Codex Soul doctor:")
     print(f"- project: {project_dir}")
@@ -356,8 +345,8 @@ def codex_doctor_command(args: argparse.Namespace) -> None:
     print(f"- project config: {project_config} ({'present' if project_config.exists() else 'missing'})")
     print(f"- project MCP: {config_contains(project_config, '[mcp_servers.soul]')}")
     print_integration_run("Codex MCP execution", codex_run)
-    if legacy_codex_episode:
-        print(f"- Codex CLI ingest: present ({legacy_codex_episode})")
+    if imported_codex_episode:
+        print(f"- Codex CLI ingest: present ({imported_codex_episode})")
     else:
         print("- Codex CLI ingest: none")
     print_file_summary("ReMe evidence", newest_files(project_dir / ".soul" / "reme", limit=3), project_dir)
@@ -365,7 +354,7 @@ def codex_doctor_command(args: argparse.Namespace) -> None:
     print_file_summary("Patch proposals", newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1), project_dir)
     if codex_run:
         print("- status: Codex MCP has executed Soul recently.")
-    elif legacy_codex_episode:
+    elif imported_codex_episode:
         print("- status: Codex CLI ingest has run, but no recent Codex MCP execution heartbeat was found.")
     else:
         print("- status: MCP configuration visibility is not enough; no Codex Soul execution evidence was found.")
@@ -856,21 +845,10 @@ def print_file_summary(label: str, files: list[Path], project_dir: Path) -> None
 
 
 def latest_episode_summary(project_dir: Path, *, source: str) -> str | None:
-    db_path = default_db_path(project_dir)
-    if not db_path.exists():
-        return None
-    try:
-        with connect(db_path) as conn:
-            init_database(conn, project_name=project_dir.name)
-            row = conn.execute(
-                "SELECT summary, created_at FROM episodes WHERE source = ? ORDER BY id DESC LIMIT 1",
-                (source,),
-            ).fetchone()
-    except Exception:
-        return None
-    if row is None:
-        return None
-    return f"{row['summary']} @ {row['created_at']}"
+    for episode in reversed(read_episodes(project_dir)):
+        if episode.get("source") == source:
+            return f"{episode.get('summary', '')} @ {episode.get('created_at', 'unknown')}"
+    return None
 
 
 def print_integration_run(label: str, run: dict[str, object] | None) -> None:
@@ -904,13 +882,6 @@ def check_http_health(api_url: str) -> str:
             return "ok" if response.status == 200 else f"http {response.status}"
     except (OSError, URLError) as exc:
         return f"not reachable: {str(exc).splitlines()[0]}"
-
-
-def connect_legacy_database():
-    db_path = default_db_path()
-    conn = connect(db_path)
-    init_database(conn, project_name=load_state().get("project", Path.cwd().name))
-    return conn
 
 
 def abort(message: str) -> NoReturn:
@@ -988,18 +959,12 @@ def build_parser() -> argparse.ArgumentParser:
     state_edit.add_argument("--updated-by", default="user")
     state_edit.set_defaults(func=state_edit_command)
 
-    agent_parser = subparsers.add_parser("agent", help="Minimal Soul-Agent adapter.")
+    agent_parser = subparsers.add_parser("agent", help="Read Current State for prompt injection.")
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command", required=True)
     agent_before = agent_subparsers.add_parser("before-task", help="Get Current State before a task.")
     agent_before.add_argument("task")
     agent_before.add_argument("--limit", type=int, default=10)
     agent_before.set_defaults(func=agent_before_task_command)
-    agent_after = agent_subparsers.add_parser("after-task", help="Submit task outcome as evidence.")
-    agent_after.add_argument("task")
-    agent_after.add_argument("outcome")
-    agent_after.add_argument("--evidence")
-    agent_after.add_argument("--source", default="agent")
-    agent_after.set_defaults(func=agent_after_task_command)
 
     api_parser = subparsers.add_parser("api", help="Run the local Soul HTTP API.")
     api_subparsers = api_parser.add_subparsers(dest="api_command", required=True)

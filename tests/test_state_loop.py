@@ -2,14 +2,13 @@
 
 from pathlib import Path
 
-from soul.adapters.agent import SoulAgentAdapter
 from soul.services.state import (
     apply_patch_proposal,
     load_state,
     propose_patch,
     save_state,
 )
-from soul.storage.database import connect, init_database
+from soul.services.state_core.state_store import load_state_markdown
 
 
 def test_state_patch_requires_explicit_apply(tmp_path: Path) -> None:
@@ -42,23 +41,14 @@ def test_state_patch_requires_explicit_apply(tmp_path: Path) -> None:
     assert any(item["id"] == "no-entity-candidate-compatibility" for item in saved["current_state"]["state_items"])
 
 
-def test_agent_adapter_after_task_records_episode_and_patch_only(tmp_path: Path) -> None:
-    db_path = tmp_path / ".soul" / "state" / "soul.db"
-    with connect(db_path) as conn:
-        init_database(conn, project_name="Test Project")
-        adapter = SoulAgentAdapter(conn, project_dir=tmp_path)
-        before = adapter.before_task("Fix Soul architecture")
-        result = adapter.after_task(
-            "Fix Soul architecture",
-            "Implemented state-centric Current State -> Evidence -> Cognitive Diff -> State Patch flow.",
-        )
-        episode = conn.execute("SELECT * FROM episodes WHERE id = ?", (result["episode_id"],)).fetchone()
+def test_agent_before_task_reads_current_state_only(tmp_path: Path) -> None:
+    load_state(tmp_path, project_name="Test Project")
+    context = load_state_markdown(tmp_path, task="Fix Soul architecture")
 
     state = load_state(tmp_path)
 
-    assert "Soul Current State" in before["context"]
-    assert before["state_artifact"] == ".soul/state/STATE.md"
-    assert episode is not None
-    assert result["patch_proposal"]["status"] == "proposed"
+    assert "Soul Current State" in context
+    assert not (tmp_path / ".soul" / "state" / "soul.db").exists()
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     assert state["version"] == 1
 

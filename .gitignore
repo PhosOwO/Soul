@@ -33,7 +33,7 @@ Thumbs.db
 
 # Local experiment and integration workspaces
 experiments/
-integrations/
+/integrations/
 docs/
 !docs/
 docs/*
