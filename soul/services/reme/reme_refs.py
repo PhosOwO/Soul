@@ -59,7 +59,7 @@ def append_reme_state_trace(
     write_metadata: dict[str, Any],
     search_metadata: dict[str, Any],
     evidence_refs: list[dict[str, Any]],
-    proposal: Mapping[str, Any],
+    working_state: Mapping[str, Any],
 ) -> Path:
     trace_path = project_dir / SOUL_DIR_NAME / TRACES_DIR_NAME / "reme_state_trace.md"
     trace_path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,9 +70,8 @@ def append_reme_state_trace(
         f"- task: {compact_transition_summary(task, 160)}",
         f"- reme_write_paths: {', '.join(ref['path'] for ref in reme_write_refs(write_metadata))}",
         f"- search_counts: vector={counts.get('vector', 0)}, keyword={counts.get('keyword', 0)}, returned={counts.get('returned', 0)}, hybrid={counts.get('hybrid', False)}",
-        f"- soul_patch_id: {proposal.get('id', '')}",
-        f"- soul_patch_status: {proposal.get('status', '')}",
-        f"- review_recommendation: {proposal.get('review_recommendation', '')}",
+        f"- working_state_route: {working_state.get('route', '')}",
+        f"- working_state_id: {(working_state.get('item') or {}).get('id', '') if isinstance(working_state.get('item'), dict) else ''}",
         "- evidence_refs:",
     ]
     if evidence_refs:

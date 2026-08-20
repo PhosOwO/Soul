@@ -39,6 +39,13 @@ from soul.services.state_core.state_store import (
     load_state,
     save_state,
 )
+from soul.services.state_core.working_state import (
+    expire_working_item,
+    load_working_state,
+    promote_working_item,
+    reject_working_item,
+    review_working_items,
+)
 from soul.services.shared.text import compact_text
 
 
@@ -51,6 +58,7 @@ def init_command(args: argparse.Namespace) -> None:
 def status_command(_: argparse.Namespace) -> None:
     state = load_state(project_name=Path.cwd().name)
     integration_runs = read_integration_runs(Path.cwd(), limit=5)
+    working_items = load_working_state(Path.cwd(), project_name=Path.cwd().name).get("items", [])[-5:]
     patches = read_recent_jsonl(Path.cwd() / ".soul" / "state" / "patch_proposals.jsonl", limit=5)
     print("Soul Status")
     print("")
@@ -65,6 +73,12 @@ def status_command(_: argparse.Namespace) -> None:
             f"({run.get('created_at', 'unknown')})"
         )
     if not integration_runs:
+        print("- none")
+    print("")
+    print("Recent Working State:")
+    for item in working_items:
+        print(f"- {item.get('id', 'unknown')} [{item.get('status', 'unknown')}] {item.get('scope', '')}")
+    if not working_items:
         print("- none")
     print("")
     print("Recent Patch Proposals:")
@@ -88,8 +102,12 @@ def queue_status_command(args: argparse.Namespace) -> None:
     print(f"- blocked: {summary.blocked}")
     print(f"- dead letter: {summary.dead_letter}")
     if summary.last_completed:
-        patch = f" {summary.last_completed.get('patch_id')}" if summary.last_completed.get("patch_id") else ""
-        print(f"- last completed: {summary.last_completed.get('created_at', 'unknown')}{patch}")
+        working = (
+            f" {summary.last_completed.get('working_state_id')}"
+            if summary.last_completed.get("working_state_id")
+            else ""
+        )
+        print(f"- last completed: {summary.last_completed.get('created_at', 'unknown')}{working}")
     else:
         print("- last completed: none")
     if summary.last_error:
@@ -109,7 +127,7 @@ def queue_drain_command(args: argparse.Namespace) -> None:
         for item in processed:
             if not isinstance(item, dict):
                 continue
-            detail = f" {item.get('patch_id')}" if item.get("patch_id") else ""
+            detail = f" {item.get('working_state_id')}" if item.get("working_state_id") else ""
             print(f"- {item.get('job_id', 'unknown')}: {item.get('status', 'unknown')}{detail}")
 
 
@@ -208,6 +226,47 @@ def state_edit_command(args: argparse.Namespace) -> None:
     )
     print(f"Edited State Patch: {edited['id']}")
     print(format_patch_review(edited, show_refs=False))
+
+
+def state_working_review_command(args: argparse.Namespace) -> None:
+    items = review_working_items(Path.cwd(), limit=args.limit)
+    if not items:
+        print("No Working State items to review.")
+        return
+    for index, item in enumerate(items, start=1):
+        if index > 1:
+            print("")
+        print(f"Working State {item.get('id', 'unknown')}")
+        print(f"Status: {item.get('status', 'working')}")
+        print(f"Scope: {item.get('scope', '')}")
+        if item.get("review_after"):
+            print(f"Review after: {item.get('review_after')}")
+        print(f"Expires: {item.get('expires_at', '')}")
+        print(f"Statement: {item.get('statement', '')}")
+        if item.get("reason"):
+            print(f"Reason: {item.get('reason')}")
+        print("Actions:")
+        print(f"- soul state working-promote {item.get('id', '')}")
+        print(f"- soul state working-expire {item.get('id', '')} --reason <reason>")
+        print(f"- soul state working-reject {item.get('id', '')} --reason <reason>")
+
+
+def state_working_promote_command(args: argparse.Namespace) -> None:
+    result = promote_working_item(Path.cwd(), args.working_id, confirmed_by=args.confirmed_by)
+    proposal = result["patch_proposal"]
+    print(f"Promoted Working State: {args.working_id}")
+    print(f"Created State Patch: {proposal['id']}")
+    print(format_patch_review(proposal, show_refs=False))
+
+
+def state_working_expire_command(args: argparse.Namespace) -> None:
+    expire_working_item(Path.cwd(), args.working_id, reason=args.reason or "")
+    print(f"Expired Working State: {args.working_id}")
+
+
+def state_working_reject_command(args: argparse.Namespace) -> None:
+    reject_working_item(Path.cwd(), args.working_id, reason=args.reason or "")
+    print(f"Rejected Working State: {args.working_id}")
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
@@ -360,6 +419,7 @@ def codex_doctor_command(args: argparse.Namespace) -> None:
         print("- Codex CLI ingest: none")
     print_file_summary("ReMe evidence", newest_files(project_dir / ".soul" / "reme", limit=3), project_dir)
     print_file_summary("Soul traces", newest_files(project_dir / ".soul" / "traces", limit=3), project_dir)
+    print_file_summary("Working State", newest_files(project_dir / ".soul" / "state", names={"working_state.json"}, limit=1), project_dir)
     print_file_summary("Patch proposals", newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1), project_dir)
     if codex_run:
         print("- status: Codex MCP has executed Soul recently.")
@@ -382,6 +442,7 @@ def dsh_doctor_command(args: argparse.Namespace) -> None:
     print_integration_run("DSH after-turn/evidence", latest_operation_run(dsh_runs, "enqueue"))
     print_file_summary("ReMe evidence", newest_files(project_dir / ".soul" / "reme", limit=3), project_dir)
     print_file_summary("Soul traces", newest_files(project_dir / ".soul" / "traces", limit=3), project_dir)
+    print_file_summary("Working State", newest_files(project_dir / ".soul" / "state", names={"working_state.json"}, limit=1), project_dir)
     print_file_summary("Patch proposals", newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1), project_dir)
     if dsh_runs:
         print("- status: DeepSeek Harness has executed Soul recently.")
@@ -498,6 +559,7 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
     hook_runs = read_recent_jsonl(project_dir / ".soul" / "state" / "hook_runs.jsonl", limit=20)
     reme_files = newest_files(project_dir / ".soul" / "reme", limit=3)
     trace_files = newest_files(project_dir / ".soul" / "traces", limit=3)
+    working_files = newest_files(project_dir / ".soul" / "state", names={"working_state.json"}, limit=1)
     patch_files = newest_files(project_dir / ".soul" / "state", names={"patch_proposals.jsonl"}, limit=1)
     queue = queue_status(project_dir)
 
@@ -511,6 +573,7 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
     print_hook_summary(hook_runs)
     print_file_summary("ReMe evidence", reme_files, project_dir)
     print_file_summary("Soul traces", trace_files, project_dir)
+    print_file_summary("Working State", working_files, project_dir)
     print_file_summary("Patch proposals", patch_files, project_dir)
     print_queue_summary(queue)
 
@@ -917,7 +980,9 @@ def print_hook_summary(hook_runs: list[dict[str, object]]) -> None:
         status = run.get("status", "unknown")
         created = run.get("created_at", "unknown time")
         detail = ""
-        if run.get("patch_id"):
+        if run.get("working_state_id"):
+            detail = f", working_state={run['working_state_id']}"
+        elif run.get("patch_id"):
             detail = f", patch={run['patch_id']}"
         elif run.get("injected") is not None:
             detail = f", injected={run['injected']}"
@@ -931,8 +996,12 @@ def print_queue_summary(summary: Any) -> None:
         f"failed_retryable={summary.failed_retryable}, blocked={summary.blocked}, dead_letter={summary.dead_letter}"
     )
     if summary.last_completed:
-        patch = f", patch={summary.last_completed.get('patch_id')}" if summary.last_completed.get("patch_id") else ""
-        print(f"  - last completed: {summary.last_completed.get('created_at', 'unknown')}{patch}")
+        working = (
+            f", working_state={summary.last_completed.get('working_state_id')}"
+            if summary.last_completed.get("working_state_id")
+            else ""
+        )
+        print(f"  - last completed: {summary.last_completed.get('created_at', 'unknown')}{working}")
     if summary.last_error:
         print(f"  - last error: {summary.last_error.get('error', 'unknown')}")
 
@@ -964,7 +1033,9 @@ def print_integration_run(label: str, run: dict[str, object] | None) -> None:
     details = [str(run.get("created_at", "unknown time")), str(run.get("operation", "unknown"))]
     if run.get("status"):
         details.append(str(run["status"]))
-    if run.get("patch_id"):
+    if run.get("working_state_id"):
+        details.append(f"working_state={run['working_state_id']}")
+    elif run.get("patch_id"):
         details.append(f"patch={run['patch_id']}")
     if run.get("injected") is not None:
         details.append(f"injected={run['injected']}")
@@ -1064,6 +1135,33 @@ def build_parser() -> argparse.ArgumentParser:
     state_edit.add_argument("--json", help="JSON array of knowledge point objects.")
     state_edit.add_argument("--updated-by", default="user")
     state_edit.set_defaults(func=state_edit_command)
+    state_working_review = state_subparsers.add_parser(
+        "working-review",
+        help="Review unconfirmed Working State items.",
+    )
+    state_working_review.add_argument("--limit", type=int, default=10)
+    state_working_review.set_defaults(func=state_working_review_command)
+    state_working_promote = state_subparsers.add_parser(
+        "working-promote",
+        help="Create a State Patch proposal from a Working State item.",
+    )
+    state_working_promote.add_argument("working_id")
+    state_working_promote.add_argument("--confirmed-by", default="user")
+    state_working_promote.set_defaults(func=state_working_promote_command)
+    state_working_expire = state_subparsers.add_parser(
+        "working-expire",
+        help="Expire a Working State item without promoting it.",
+    )
+    state_working_expire.add_argument("working_id")
+    state_working_expire.add_argument("--reason")
+    state_working_expire.set_defaults(func=state_working_expire_command)
+    state_working_reject = state_subparsers.add_parser(
+        "working-reject",
+        help="Reject a Working State item.",
+    )
+    state_working_reject.add_argument("working_id")
+    state_working_reject.add_argument("--reason")
+    state_working_reject.set_defaults(func=state_working_reject_command)
 
     agent_parser = subparsers.add_parser("agent", help="Read Current State for prompt injection.")
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command", required=True)

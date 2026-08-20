@@ -89,13 +89,10 @@ def test_queue_retry_waits_for_next_run_at(tmp_path):
 
 def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch):
     def fake_propose_reme_transition(**kwargs):
-        proposals = tmp_path / ".soul" / "state" / "patch_proposals.jsonl"
-        proposals.parent.mkdir(parents=True, exist_ok=True)
-        proposals.write_text('{"id":"patch_1"}\n', encoding="utf-8")
         return {
             "memory_mode": "soul_reme",
             "reme_write_mode": "auto_memory",
-            "patch_proposal": {"id": "patch_1"},
+            "working_state": {"route": "working_state", "item": {"id": "working_1"}},
         }
 
     monkeypatch.setattr("soul.services.integrations.queue.propose_reme_transition", fake_propose_reme_transition)
@@ -111,9 +108,11 @@ def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch)
 
     assert result["locked"] is False
     assert result["processed"][0]["status"] == "completed"
-    assert (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
+    assert result["processed"][0]["working_state_id"] == "working_1"
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     summary = queue_status(tmp_path)
     assert summary.completed == 1
+    assert summary.last_completed["working_state_id"] == "working_1"
 
 
 def test_queue_jsonl_append_is_safe_for_concurrent_hooks(tmp_path):

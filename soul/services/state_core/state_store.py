@@ -53,8 +53,9 @@ def initial_state(project_name: str = "Soul Project") -> StateDoc:
                 {
                     "id": "state-centric-loop",
                     "statement": (
-                        "Soul's core loop is Current State -> Evidence -> Cognitive Diff "
-                        "-> State Patch -> Confirm -> New State."
+                        "Soul's core loop is Accepted State plus Working State: evidence can update "
+                        "short-lived Working State immediately, while accepted state changes require "
+                        "explicit State Patch confirmation."
                     ),
                     "status": PATCH_STATUS_ACCEPTED,
                     "confidence": 0.9,
@@ -74,8 +75,9 @@ def initial_state(project_name: str = "Soul Project") -> StateDoc:
                     "id": "state-centric-loop",
                     "kind": STATE_KIND_ACCEPTED_BELIEF,
                     "statement": (
-                        "Soul's core loop is Current State -> Evidence -> Cognitive Diff "
-                        "-> State Patch -> Confirm -> New State."
+                        "Soul's core loop is Accepted State plus Working State: evidence can update "
+                        "short-lived Working State immediately, while accepted state changes require "
+                        "explicit State Patch confirmation."
                     ),
                     "status": PATCH_STATUS_ACCEPTED,
                     "priority": "high",
@@ -121,9 +123,13 @@ def save_state(state: StateDoc, project_dir: Path | None = None) -> None:
 
 def load_state_markdown(project_dir: Path | None = None, limit: int = 10, task: str = "") -> str:
     from soul.services.state_core.state_render import format_state_context
+    from soul.services.state_core.working_state import format_working_state_context
 
     state = load_state(project_dir)
     context = format_state_context(state, limit=limit, task=task)
+    working_context = format_working_state_context(project_dir, task=task, limit=5)
+    if working_context:
+        context += working_context
     paths = state_paths(project_dir)
     if not paths.state_markdown_path.exists() or not task:
         paths.state_markdown_path.parent.mkdir(parents=True, exist_ok=True)

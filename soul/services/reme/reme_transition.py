@@ -23,9 +23,9 @@ from soul.services.reme.reme_refs import (
     safe_reme_note_name,
     safe_reme_session_id,
 )
-from soul.services.state_core.proposals import propose_patch
-from soul.services.state_core.state_store import append_patch_proposal, load_state
+from soul.services.state_core.state_store import load_state
 from soul.services.state_core.state_store import int_value
+from soul.services.state_core.working_state import upsert_working_state_from_evidence
 
 
 def propose_reme_transition(
@@ -116,17 +116,32 @@ def propose_reme_transition(
             "search_counts": search_result.metadata.get("counts", {}),
         },
     }
-    proposal = propose_patch(load_state(project_dir), patch_evidence, source=reme_source)
-    append_patch_proposal(proposal, project_dir)
+    working_evidence = {
+        **patch_evidence,
+        "summary": compact_transition_summary(
+            " ".join(
+                part
+                for part in [
+                    str(evidence_payload.get("summary") or ""),
+                    str(evidence_payload.get("outcome") or outcome or ""),
+                ]
+                if part
+            )
+        ),
+        "content": str(evidence_payload.get("content") or outcome or ""),
+    }
+    state = load_state(project_dir)
+    working_state_result = upsert_working_state_from_evidence(project_dir, working_evidence, state=state)
     trace_path = append_reme_state_trace(
         project_dir,
         task=task,
         write_metadata=write_result.metadata,
         search_metadata=search_result.metadata,
         evidence_refs=refs,
-        proposal=proposal,
+        working_state=working_state_result,
     )
     if record_integration_run is not None:
+        working_item = working_state_result.get("item")
         record_integration_run(
             {
                 "host": raw_source,
@@ -134,7 +149,8 @@ def propose_reme_transition(
                 "status": STATUS_SUCCESS,
                 "memory_mode": MEMORY_MODE_SOUL_REME,
                 "task": compact_transition_summary(task, 160),
-                "patch_id": proposal.get("id"),
+                "working_state_route": working_state_result.get("route"),
+                "working_state_id": working_item.get("id") if isinstance(working_item, dict) else None,
                 "reme_write_mode": write_mode,
                 "reme_requested_write_mode": write_mode,
                 "evidence_ref_count": len(refs),
@@ -148,7 +164,7 @@ def propose_reme_transition(
         "reme_requested_write_mode": write_mode,
         "reme_search": search_result.metadata,
         "evidence_refs": refs,
-        "patch_proposal": proposal,
+        "working_state": working_state_result,
         "trace_path": str(trace_path.relative_to(project_dir)).replace("\\", "/"),
     }
 

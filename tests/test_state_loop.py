@@ -20,7 +20,10 @@ def test_state_patch_requires_explicit_apply(tmp_path: Path) -> None:
         {
             "source": "test",
             "summary": "Move Soul away from entity-centric storage to a state-centric loop.",
-            "content": "Current State -> Evidence -> Cognitive Diff -> State Patch -> Confirm -> New State.",
+            "content": (
+                "Evidence can update short-lived Working State immediately; "
+                "accepted state changes still require explicit State Patch confirmation."
+            ),
             "state_item": {
                 "id": "no-entity-candidate-compatibility",
                 "kind": "accepted_belief",

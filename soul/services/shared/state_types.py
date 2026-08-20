@@ -100,3 +100,28 @@ class PatchProposal(TypedDict):
     evidence: dict[str, Any]
     operations: list[PatchOperation]
     review_recommendation: str
+
+
+class WorkingStateItem(TypedDict, total=False):
+    id: str
+    status: str
+    statement: str
+    reason: str
+    scope: str
+    review_candidate: bool
+    evidence_refs: list[dict[str, Any]]
+    source: str
+    task: str
+    created_at: str
+    updated_at: str
+    expires_at: str
+    review_after: str
+    supersedes: list[str]
+    conflicts_with: list[str]
+
+
+class WorkingStateDoc(TypedDict):
+    schema_version: int
+    project: str
+    updated_at: str
+    items: list[WorkingStateItem]

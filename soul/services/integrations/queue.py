@@ -188,19 +188,21 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             },
             reme=payload.get("reme") if isinstance(payload.get("reme"), dict) else None,
         )
-        patch = result.get("patch_proposal")
-        patch_id = patch.get("id") if isinstance(patch, dict) else None
+        working_state = result.get("working_state")
+        working_item = working_state.get("item") if isinstance(working_state, dict) else None
+        working_state_id = working_item.get("id") if isinstance(working_item, dict) else None
         append_queue_event(
             project_dir,
             job_id,
             EVENT_COMPLETED,
             attempt=selection.attempt,
             idempotency_key=idempotency_key,
-            patch_id=patch_id,
+            working_state_id=working_state_id,
+            working_state_route=working_state.get("route") if isinstance(working_state, dict) else None,
             memory_mode=result.get("memory_mode"),
             reme_write_mode=result.get("reme_write_mode"),
         )
-        return {"job_id": job_id, "status": EVENT_COMPLETED, "patch_id": patch_id}
+        return {"job_id": job_id, "status": EVENT_COMPLETED, "working_state_id": working_state_id}
     except Exception as exc:
         retryable = is_retryable_error(exc)
         event: QueueEventName = EVENT_FAILED if retryable and selection.attempt < MAX_ATTEMPTS else EVENT_BLOCKED

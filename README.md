@@ -2,21 +2,20 @@
 
 Soul is a lightweight project memory and current-state layer for AI agents.
 
-It keeps long memory in ReMe and injects only a compact Current State into the next agent turn.
+It keeps durable evidence in ReMe, injects compact Soul state into agent turns, and separates confirmed state from short-lived working assumptions.
 
 ```text
-agent episode -> ReMe evidence -> Soul STATE.md -> next agent turn
+agent turn -> ReMe evidence -> Working State / Accepted State -> next agent turn
 ```
 
 ## Status
 
 Soul is an experimental MVP.
 
-- Python CLI, HTTP API, and MCP entry points are available.
-- Codex and TraeX integration are supported through MCP and project hooks.
-- npm packaging is prepared as `@soulkit/soul`; registry publishing is still pending.
+- Python CLI, HTTP API, and MCP entry points.
+- Codex, TraeX, and DeepSeek Harness integration paths.
 - ReMe stores ordinary memory and evidence as inspectable local files.
-- Soul keeps a small accepted Current State snapshot.
+- Soul injects confirmed Accepted State plus unconfirmed Working State.
 
 Soul is not a planner, executor, or full chat-history summarizer.
 
@@ -57,50 +56,44 @@ Runtime files stay under the target project:
 ```text
 .soul/
   reme/       ReMe memory and evidence consumed by Soul
-  state/      STATE.md, state.json, patch_proposals.jsonl, integration_runs.jsonl
+  state/      STATE.md, state.json, working_state.json, patch_proposals.jsonl, integration_runs.jsonl
   traces/     evidence-to-state trace files
 ```
 
 These files should normally stay out of Git.
 
-## How Soul Uses ReMe
+## State Model
 
-ReMe owns durable memory and evidence files. Soul consumes ReMe outputs, stores compact evidence references in `.soul/state/`, and injects only Current State into agents by default.
+- ReMe keeps durable evidence and long memory under `.soul/reme/`.
+- Accepted State is confirmed project cognition in `STATE.md` and `state.json`.
+- Working State is unconfirmed, short-lived context in `working_state.json`.
+- State Patches require explicit review before changing Accepted State.
 
-By default Soul uses `.soul/reme/` as the project-local ReMe workspace. ReMe-backed writes use ReMe CLI capabilities such as `auto_memory`, `read`, `traverse`, `auto_dream`, and `proactive`.
+## ReMe Config
 
-`auto_memory` uses the model configuration visible to the Soul process. For a global setup, create a Soul env template:
+Soul uses `.soul/reme/` as the project-local ReMe workspace. `auto_memory` needs model config visible to the Soul process.
 
-macOS/Linux:
+Create a global env template:
 
 ```bash
 soul reme init-config --scope global
 ```
 
-Windows PowerShell:
-
-```powershell
-soul reme init-config --scope global
-```
-
-Set `SOUL_HOME` to use a custom cross-platform location; Soul will read `$SOUL_HOME/.env`.
-Fill the generated file with:
+Fill it with:
 
 ```dotenv
-# DeepSeek example:
 LLM_API_KEY=sk-your-api-key
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_MODEL_NAME=deepseek-chat
-
-# OpenAI-compatible / Ark example:
-# LLM_API_KEY=your-api-key
-# LLM_BASE_URL=https://ark-cn-beijing.bytedance.net/api/v3
-# LLM_MODEL_NAME=your-endpoint-id
 ```
 
-Run `soul reme doctor --project-dir . --create-workspace` to check the ReMe CLI, `.soul/reme` workspace, and visible `auto_memory` environment.
-Project `.env` files can override the global values when a project needs a different model. If these values are still
-missing, Soul tries to infer them from readable Codex/TraeX OpenAI-compatible provider config.
+Use `SOUL_HOME=/path/to/soul-home` for a custom location. Project `.env` files can override global values.
+
+Check setup:
+
+```bash
+soul reme doctor --project-dir . --create-workspace
+```
 
 ## Integrations
 
@@ -119,10 +112,7 @@ missing, Soul tries to infer them from readable Codex/TraeX OpenAI-compatible pr
 | ReMe Web/HTTP service | `soul reme start --project-dir .` |
 | Benchmark | `python benchmarks/soulbench_v0/run_soulbench.py` |
 
-On Windows, `soul reme start --project-dir .` starts ReMe with the service window hidden by default. Use
-`--foreground` when you want console logs for debugging.
-
-For TraeX, install Soul into the target project first:
+TraeX local install:
 
 ```bash
 # after publishing: npm install @soulkit/soul
@@ -130,27 +120,29 @@ npm install /path/to/SoulKit
 ./node_modules/.bin/soul traex install --init
 ```
 
-If your TraeX sessions do not load project resources, install the user-level config too:
+If TraeX does not load project resources, install user-level config:
 
 ```bash
 soul traex install --scope user --project-dir . --init
 ```
 
-In TraeX, `/mcp` and `/hooks` show configuration visibility. To verify Soul actually ran, start a new turn and then run:
-
-```bash
-soul traex doctor --project-dir .
-```
-
-The same rule applies to Codex and DeepSeek Harness: use the relevant `doctor` command to verify recent Soul execution, not just MCP/API visibility. Codex setup writes `[mcp_servers.soul]` to `$CODEX_HOME/config.toml` or the current user's default Codex config.
-
-For DeepSeek Harness, keep the Soul API running while DSH runs:
+DeepSeek Harness:
 
 ```bash
 soul-api --project-dir . --port 8765
 soul dsh install --project-dir .
 dsh web --patch .soul/dsh/soul.patch.yml
 ```
+
+Verify runtime execution:
+
+```bash
+soul traex doctor --project-dir .
+soul codex doctor --project-dir .
+soul dsh doctor --project-dir .
+```
+
+On Windows, `soul reme start --project-dir .` starts ReMe with the service window hidden by default. Use `--foreground` for console logs.
 
 ## More
 

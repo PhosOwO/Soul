@@ -267,7 +267,8 @@ class SoulApi:
 def build_agent_injection(context: str) -> str:
     return (
         "[Soul Current State]\n"
-        "Use this as accepted project cognition for continuity and constraints. "
+        "Use Accepted State as confirmed project cognition. "
+        "Use Working State only as unconfirmed, short-lived operating context. "
         "Do not treat Soul as a planner or executor; only use the state to improve the next answer.\n\n"
         f"{context}\n"
         "[/Soul Current State]"

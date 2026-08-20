@@ -8,6 +8,7 @@ import pytest
 from soul.api import SoulApi
 from soul.adapters.reme import ReMeJobResult
 from soul.services.state import load_state
+from soul.services.state_core.working_state import upsert_working_state_from_evidence
 
 
 def datetime_suffix() -> str:
@@ -25,6 +26,31 @@ def test_soul_api_get_state_returns_injection(tmp_path):
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"host": "deepseek-harness"' in runs
     assert '"operation": "get_state"' in runs
+
+
+def test_soul_api_get_state_includes_unconfirmed_working_state(tmp_path):
+    load_state(tmp_path, project_name="Demo")
+    upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "MHW 漏报诊断",
+            "summary": "当前主线暂定为 SST-first Qnet/STR。",
+            "evidence_refs": [{"type": "reme_file", "path": "daily/2026-08-20/mhw.md"}],
+            "working_state": {
+                "route": "working_state",
+                "statement": "当前主线暂定为 SST-first Qnet/STR。",
+                "reason": "不保留会导致下一轮继续重复旧方向。",
+                "scope": "MHW 漏报诊断",
+            },
+        },
+    )
+
+    payload = SoulApi(tmp_path).get_state(task="继续 MHW 漏报诊断")
+
+    assert "Use Accepted State as confirmed project cognition" in payload["injection"]
+    assert "Working State, unconfirmed:" in payload["injection"]
+    assert "SST-first Qnet/STR" in payload["injection"]
 
 
 def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatch):
@@ -177,17 +203,13 @@ def test_soul_api_reme_transition_writes_reme_and_proposes_refs_only_patch(tmp_p
         {"type": "reme_file", "path": "daily/2026-08-16/dsh_demo.md"},
         {"type": "reme_file", "path": "session/dialog/session-1.jsonl"},
     ]
-    proposal = payload["patch_proposal"]
-    assert proposal["status"] == "proposed"
-    assert proposal["evidence"]["memory_owner"] == "reme"
-    assert proposal["evidence"]["reme"]["workspace_dir"].replace("\\", "/").endswith(".soul/reme")
-    assert proposal["evidence"]["reme"]["write_mode"] == "auto_memory"
-    assert proposal["evidence"]["content"] == "ReMe evidence refs attached; ordinary memory body remains in ReMe."
-    assert "先验证 MLD。" not in proposal["evidence"]["content"]
+    assert payload["working_state"]["route"] == "working_state"
+    assert payload["working_state"]["item"]["statement"] == "先验证 MLD。"
+    assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     assert payload["trace_path"] == ".soul/traces/reme_state_trace.md"
     trace = (tmp_path / ".soul" / "traces" / "reme_state_trace.md").read_text(encoding="utf-8")
     assert "reme://daily/2026-08-16/dsh_demo.md:1-12#chunk-1" in trace
-    assert proposal["id"] in trace
+    assert "working_state_route: working_state" in trace
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"operation": "propose_reme_transition"' in runs
     assert '"memory_mode": "soul_reme"' in runs
@@ -232,7 +254,7 @@ def test_soul_api_reme_transition_ignores_external_workspace_for_writes(tmp_path
     )
 
     assert captured_workspace == tmp_path / ".soul" / "reme"
-    assert payload["patch_proposal"]["evidence"]["reme"]["workspace_dir"].replace("\\", "/").endswith(".soul/reme")
+    assert payload["working_state"]["route"] == "working_state"
 
 
 def test_soul_api_reme_transition_can_use_fallback_daily_write(tmp_path, monkeypatch):

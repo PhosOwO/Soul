@@ -31,7 +31,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "observe_evidence",
         "description": (
             "Enqueue turn evidence for non-blocking ReMe processing. "
-            "Background processing may later create a Soul State Patch proposal."
+            "Background processing may later update unconfirmed Working State."
         ),
         "inputSchema": {
             "type": "object",
