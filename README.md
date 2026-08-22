@@ -50,7 +50,7 @@ soul review mock --reset
 soul --review --review-project-dir .soul/sandboxes/review-mock --review-port 8766 --review-restart
 ```
 
-For a short recording and screenshot walkthrough, see [Review Card Demo](docs/review-card-demo.md).
+For a screenshot/recording walkthrough, see [Review Card Demo](docs/review-card-demo.md).
 
 ## 🧠 ReMe Setup
 
