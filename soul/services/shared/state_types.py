@@ -109,6 +109,7 @@ class WorkingStateItem(TypedDict, total=False):
     reason: str
     scope: str
     review_candidate: bool
+    review_card: bool
     evidence_refs: list[dict[str, Any]]
     source: str
     task: str

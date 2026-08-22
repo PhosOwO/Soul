@@ -48,7 +48,9 @@ Initialize a project:
 ```bash
 soul init
 soul state show
+soul state review-card
 soul context
+soul --review
 ```
 
 Runtime files stay under the target project:
@@ -68,6 +70,7 @@ These files should normally stay out of Git.
 - Accepted State is confirmed project cognition in `STATE.md` and `state.json`.
 - Working State is unconfirmed, short-lived context in `working_state.json`.
 - State Patches require explicit review before changing Accepted State.
+- Review Cards expose only the small set of high-value state decisions that are ready to confirm or need review.
 
 ## ReMe Config
 
@@ -110,7 +113,14 @@ soul reme doctor --project-dir . --create-workspace
 | TraeX user setup | `soul traex install --scope user --project-dir . --init` |
 | TraeX verification | `soul traex doctor --project-dir .` |
 | ReMe Web/HTTP service | `soul reme start --project-dir .` |
+| Soul Review page | `soul --review` |
 | Benchmark | `python benchmarks/soulbench_v0/run_soulbench.py` |
+
+If the local Review server is already running with old code or a different project, restart it:
+
+```bash
+soul --review --review-restart
+```
 
 TraeX local install:
 

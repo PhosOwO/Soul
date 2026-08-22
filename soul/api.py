@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -11,6 +13,8 @@ from soul.adapters.reme import ReMeCliAdapter
 from soul.services.shared.constants import (
     HOST_HTTP_API,
     HOST_SOUL_HTTP_API,
+    PATCH_STATUS_APPLIED,
+    PATCH_STATUS_REJECTED,
     MEMORY_MODE_SOUL_REME,
     OP_CONSOLIDATE_MEMORY,
     OP_ENQUEUE_EVIDENCE,
@@ -25,7 +29,9 @@ from soul.services.reme.reme_transition import propose_reme_transition as propos
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
-from soul.services.state_core.proposals import apply_patch_proposal, propose_patch
+from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
+from soul.services.state_core.review_card import build_review_card
+from soul.front.review_ui import render_review_page
 from soul.services.state_core.state_store import (
     append_patch_proposal,
     find_patch_proposal,
@@ -34,6 +40,7 @@ from soul.services.state_core.state_store import (
     save_state,
 )
 from soul.services.shared.state_types import PatchProposal
+from soul.services.state_core.working_state import edit_working_item, promote_working_item, reject_working_item
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -262,7 +269,103 @@ class SoulApi:
             )
         next_state = apply_patch_proposal(state, proposal, confirmed_by=confirmed_by)
         save_state(next_state, self.project_dir)
+        append_patch_status(proposal, PATCH_STATUS_APPLIED, self.project_dir, updated_by=confirmed_by)
         return {"state": next_state, "applied_patch": proposal}
+
+    def review_card(self, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
+        return build_review_card(self.project_dir, limit=limit, near_expiry_hours=near_expiry_hours)
+
+    def accept_review_candidate(self, candidate_id: str, confirmed_by: str = HOST_SOUL_HTTP_API) -> dict[str, Any]:
+        source_type, source_id = parse_candidate_id(candidate_id)
+        if source_type == "patch":
+            return {"candidate_id": candidate_id, "result": self.apply_patch(source_id, confirmed_by=confirmed_by)}
+        if source_type == "working":
+            promoted = promote_working_item(self.project_dir, source_id, confirmed_by=confirmed_by)
+            proposal = promoted["patch_proposal"]
+            state = load_state(self.project_dir)
+            next_state = apply_patch_proposal(state, proposal, confirmed_by=confirmed_by)
+            save_state(next_state, self.project_dir)
+            append_patch_status(proposal, PATCH_STATUS_APPLIED, self.project_dir, updated_by=confirmed_by)
+            return {"candidate_id": candidate_id, "result": {"working_item": promoted["working_item"], "state": next_state}}
+        raise ValueError(f"Unsupported review candidate type: {source_type}")
+
+    def reject_review_candidate(
+        self,
+        candidate_id: str,
+        *,
+        reason: str = "",
+        rejected_by: str = HOST_SOUL_HTTP_API,
+    ) -> dict[str, Any]:
+        source_type, source_id = parse_candidate_id(candidate_id)
+        if source_type == "patch":
+            proposal = find_patch_proposal(source_id, self.project_dir)
+            record = append_patch_status(
+                proposal,
+                PATCH_STATUS_REJECTED,
+                self.project_dir,
+                reason=reason,
+                updated_by=rejected_by,
+            )
+            return {"candidate_id": candidate_id, "rejected": record}
+        if source_type == "working":
+            return {"candidate_id": candidate_id, "rejected": reject_working_item(self.project_dir, source_id, reason=reason)}
+        raise ValueError(f"Unsupported review candidate type: {source_type}")
+
+    def edit_review_candidate(self, candidate_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        source_type, source_id = parse_candidate_id(candidate_id)
+        statement = optional_str(payload.get("statement"))
+        reason = optional_str(payload.get("reason"))
+        scope = optional_str(payload.get("scope"))
+        updated_by = str(payload.get("updated_by") or HOST_SOUL_HTTP_API)
+        if source_type == "patch":
+            proposal = find_patch_proposal(source_id, self.project_dir)
+            knowledge_points = None
+            if statement:
+                knowledge_points = [
+                    {
+                        "statement": statement,
+                        "kind": str(payload.get("kind") or "accepted_belief"),
+                        "priority": str(payload.get("priority") or "medium"),
+                        "confidence": float(payload.get("confidence") or 0.75),
+                        "why_remember": reason or "",
+                    }
+                ]
+            edited = edit_patch_proposal(
+                proposal,
+                self.project_dir,
+                title=scope,
+                why_remember=reason,
+                knowledge_points=knowledge_points,
+                updated_by=updated_by,
+            )
+            return {"candidate_id": candidate_id, "edited": edited}
+        if source_type == "working":
+            edited = edit_working_item(
+                self.project_dir,
+                source_id,
+                statement=statement,
+                reason=reason,
+                scope=scope,
+                review_after=optional_str(payload.get("review_after")),
+                expires_at=optional_str(payload.get("expires_at")),
+                updated_by=updated_by,
+            )
+            return {"candidate_id": candidate_id, "edited": edited}
+        raise ValueError(f"Unsupported review candidate type: {source_type}")
+
+    def snooze_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
+        source_type, source_id = parse_candidate_id(candidate_id)
+        if source_type != "working":
+            raise ValueError("Only Working State review candidates can be snoozed.")
+        until = datetime.now().astimezone() + timedelta(hours=hours)
+        edited = edit_working_item(
+            self.project_dir,
+            source_id,
+            review_after=until.isoformat(),
+            expires_at=until.isoformat(),
+            updated_by=HOST_SOUL_HTTP_API,
+        )
+        return {"candidate_id": candidate_id, "snoozed": edited}
 
 def build_agent_injection(context: str) -> str:
     return (
@@ -297,6 +400,15 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
             parsed = urlparse(self.path)
             if parsed.path == "/health":
                 self.write_json({"ok": True, "service": HOST_SOUL_HTTP_API})
+                return
+            if parsed.path == "/review":
+                self.write_html(render_review_page())
+                return
+            if parsed.path == "/review-card":
+                query = parse_qs(parsed.query)
+                limit = int_value(first_query_value(query, "limit", "5"), default=5)
+                near_expiry_hours = int_value(first_query_value(query, "near_expiry_hours", "4"), default=4)
+                self.write_json(api.review_card(limit=limit, near_expiry_hours=near_expiry_hours))
                 return
             if parsed.path == "/state":
                 query = parse_qs(parsed.query)
@@ -377,6 +489,38 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                     confirmed_by = str(payload.get("confirmed_by", HOST_SOUL_HTTP_API))
                     self.write_json(api.apply_patch(proposal_id, confirmed_by=confirmed_by))
                     return
+                if self.path == "/review/accept":
+                    self.write_json(
+                        api.accept_review_candidate(
+                            str(payload["candidate_id"]),
+                            confirmed_by=str(payload.get("confirmed_by", HOST_SOUL_HTTP_API)),
+                        )
+                    )
+                    return
+                if self.path == "/review/reject":
+                    self.write_json(
+                        api.reject_review_candidate(
+                            str(payload["candidate_id"]),
+                            reason=str(payload.get("reason") or ""),
+                            rejected_by=str(payload.get("rejected_by", HOST_SOUL_HTTP_API)),
+                        )
+                    )
+                    return
+                if self.path == "/review/edit":
+                    self.write_json(api.edit_review_candidate(str(payload["candidate_id"]), payload))
+                    return
+                if self.path == "/review/snooze":
+                    self.write_json(
+                        api.snooze_review_candidate(
+                            str(payload["candidate_id"]),
+                            hours=int_value(payload.get("hours"), default=24),
+                        )
+                    )
+                    return
+                if self.path == "/shutdown":
+                    self.write_json({"ok": True, "service": HOST_SOUL_HTTP_API, "shutdown": True})
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    return
                 self.write_json({"error": "not_found"}, status=404)
             except Exception as exc:
                 self.write_json({"error": str(exc)}, status=400)
@@ -394,6 +538,14 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
             body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def write_html(self, html: str, status: int = 200) -> None:
+            body = html.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -416,6 +568,21 @@ def optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def optional_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def parse_candidate_id(candidate_id: str) -> tuple[str, str]:
+    if ":" not in candidate_id:
+        raise ValueError(f"Invalid review candidate id: {candidate_id}")
+    source_type, source_id = candidate_id.split(":", 1)
+    if not source_id:
+        raise ValueError(f"Invalid review candidate id: {candidate_id}")
+    return source_type, source_id
 
 
 def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:

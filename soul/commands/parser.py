@@ -5,9 +5,12 @@ import json
 import os
 import shutil
 import sys
+import threading
+import time
+import webbrowser
 from importlib import resources
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, cast
 
@@ -31,6 +34,7 @@ from soul.services.integrations.queue import drain_queue, queue_status
 from soul.services.integrations.reflection import reflect_episode
 from soul.services.reme.runtime_config import resolve_reme_runtime_config, soul_home
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
+from soul.services.state_core.review_card import build_review_card
 from soul.services.state_core.state_render import format_state_context
 from soul.services.state_core.state_store import (
     append_patch_proposal,
@@ -40,6 +44,7 @@ from soul.services.state_core.state_store import (
     save_state,
 )
 from soul.services.state_core.working_state import (
+    edit_working_item,
     expire_working_item,
     load_working_state,
     promote_working_item,
@@ -269,6 +274,34 @@ def state_working_reject_command(args: argparse.Namespace) -> None:
     print(f"Rejected Working State: {args.working_id}")
 
 
+def state_working_edit_command(args: argparse.Namespace) -> None:
+    item = edit_working_item(
+        Path.cwd(),
+        args.working_id,
+        statement=args.statement,
+        reason=args.reason,
+        scope=args.scope,
+        review_after=args.review_after,
+        expires_at=args.expires_at,
+        updated_by=args.updated_by,
+    )
+    print(f"Edited Working State: {args.working_id}")
+    print(f"Statement: {item.get('statement', '')}")
+    if item.get("reason"):
+        print(f"Reason: {item.get('reason')}")
+    print(f"Scope: {item.get('scope', '')}")
+    print(f"Review after: {item.get('review_after', '')}")
+    print(f"Expires: {item.get('expires_at', '')}")
+
+
+def state_review_card_command(args: argparse.Namespace) -> None:
+    card = build_review_card(Path.cwd(), limit=args.limit, near_expiry_hours=args.near_expiry_hours)
+    if args.json:
+        print(json.dumps(card, ensure_ascii=False, indent=2))
+        return
+    print(format_review_card(card, show_refs=args.refs))
+
+
 def agent_before_task_command(args: argparse.Namespace) -> None:
     from soul.services.state_core.state_store import load_state_markdown
 
@@ -279,6 +312,39 @@ def api_serve_command(args: argparse.Namespace) -> None:
     from soul.api import serve
 
     serve(Path(args.project_dir), host=args.host, port=args.port)
+
+
+def review_web_command(args: argparse.Namespace) -> None:
+    from soul.api import serve
+
+    project_dir = Path(args.review_project_dir)
+    base_url = f"http://{args.review_host}:{args.review_port}"
+    review_url = base_url + "/review"
+    health = check_http_health(base_url)
+    if args.review_restart and health == "ok":
+        print(f"Restarting Soul Review at {review_url}")
+        shutdown_status = shutdown_http_api(base_url)
+        if shutdown_status != "ok":
+            abort(
+                "Existing Soul Review server does not support automatic restart. "
+                "Stop the old `soul --review` process manually, then run `soul --review` again."
+            )
+        if not wait_for_http_status(base_url, expected_down=True, timeout_seconds=3):
+            abort(
+                "Existing Soul Review server did not stop in time. "
+                "Stop it manually, then run `soul --review` again."
+            )
+        health = check_http_health(base_url)
+    if health == "ok":
+        print(f"Soul Review is available: {review_url}")
+        print("Use --review-restart to restart the local Review server.")
+        if not args.review_no_open:
+            webbrowser.open(review_url)
+        return
+    print(f"Starting Soul Review for {project_dir.resolve()}: {review_url}")
+    if not args.review_no_open:
+        threading.Timer(0.8, lambda: webbrowser.open(review_url)).start()
+    serve(project_dir, host=args.review_host, port=args.review_port)
 
 
 def import_codex_command(args: argparse.Namespace) -> None:
@@ -959,6 +1025,53 @@ def format_patch_review(proposal: Mapping[str, Any], *, show_refs: bool = False)
     return "\n".join(lines)
 
 
+def format_review_card(card: Mapping[str, Any], *, show_refs: bool = False) -> str:
+    counts = card.get("counts") if isinstance(card.get("counts"), Mapping) else {}
+    lines = [
+        f"Soul Review Card · {card.get('project', 'unknown')}",
+        f"{counts.get('total', 0)} candidate(s): {counts.get('ready_to_confirm', 0)} ready, {counts.get('needs_review', 0)} need review",
+        "",
+    ]
+    if not card.get("has_reviewable_content"):
+        lines.append("No high-quality state decisions to review.")
+        return "\n".join(lines)
+    lines.extend(format_review_card_section("Ready to Confirm", card.get("ready_to_confirm"), show_refs=show_refs))
+    if lines[-1] != "":
+        lines.append("")
+    lines.extend(format_review_card_section("Needs Review", card.get("needs_review"), show_refs=show_refs))
+    if lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def format_review_card_section(title: str, raw_candidates: Any, *, show_refs: bool = False) -> list[str]:
+    candidates = raw_candidates if isinstance(raw_candidates, list) else []
+    lines = [title + ":"]
+    if not candidates:
+        lines.append("- none")
+        lines.append("")
+        return lines
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        lines.append(f"- [{candidate.get('recommended_action', 'review')}] {candidate.get('statement', '')}")
+        lines.append(f"  actions: {', '.join(str(action) for action in candidate.get('actions', []))}")
+        if show_refs:
+            evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), Mapping) else {}
+            refs = evidence.get("refs") if isinstance(evidence.get("refs"), list) else []
+            lines.append(f"  reason: {candidate.get('review_reason', '')}")
+            lines.append(f"  source: {candidate.get('source_type', 'unknown')} {candidate.get('source_id', '')}")
+            lines.append(f"  evidence summary: {evidence.get('summary', '')}")
+            if refs:
+                lines.append("  evidence refs:")
+                for ref in refs:
+                    lines.append(f"    - {json.dumps(ref, ensure_ascii=False)}")
+            else:
+                lines.append("  evidence refs: none")
+    lines.append("")
+    return lines
+
+
 def newest_files(root: Path, *, limit: int, names: set[str] | None = None) -> list[Path]:
     if not root.exists():
         return []
@@ -1061,13 +1174,47 @@ def check_http_health(api_url: str) -> str:
         return f"not reachable: {str(exc).splitlines()[0]}"
 
 
+def shutdown_http_api(api_url: str) -> str:
+    url = api_url.rstrip("/") + "/shutdown"
+    request = Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urlopen(request, timeout=2) as response:
+            return "ok" if response.status == 200 else f"http {response.status}"
+    except (OSError, URLError) as exc:
+        return f"not reachable: {str(exc).splitlines()[0]}"
+
+
+def wait_for_http_status(api_url: str, *, expected_down: bool, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        is_up = check_http_health(api_url) == "ok"
+        if expected_down != is_up:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def abort(message: str) -> NoReturn:
     raise SystemExit(message)
 
 
+def top_level_command(args: argparse.Namespace) -> None:
+    if args.review:
+        review_web_command(args)
+        return
+    abort("a command is required unless --review is used.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soul", description="Soul Core command line interface.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument("--review", action="store_true", help="Start or open the local Soul Review web UI.")
+    parser.add_argument("--review-project-dir", default=".", help="Project directory for --review. Defaults to cwd.")
+    parser.add_argument("--review-host", default="127.0.0.1", help="Host for --review local server.")
+    parser.add_argument("--review-port", type=int, default=8765, help="Port for --review local server.")
+    parser.add_argument("--review-no-open", action="store_true", help="Start/check --review without opening a browser.")
+    parser.add_argument("--review-restart", action="store_true", help="Restart an existing local Soul Review server.")
+    parser.set_defaults(func=top_level_command)
+    subparsers = parser.add_subparsers(dest="command")
 
     init_parser = subparsers.add_parser("init", help="Initialize .soul/state state files.")
     init_parser.add_argument("--project-name", help="Defaults to the current directory name.")
@@ -1110,6 +1257,15 @@ def build_parser() -> argparse.ArgumentParser:
     state_review.add_argument("--limit", type=int, default=5)
     state_review.add_argument("--refs", action="store_true", help="Show folded evidence refs and ReMe metadata.")
     state_review.set_defaults(func=state_review_command)
+    state_review_card = state_subparsers.add_parser(
+        "review-card",
+        help="Show the low-noise state decisions intended for the tray review card.",
+    )
+    state_review_card.add_argument("--limit", type=int, default=5)
+    state_review_card.add_argument("--near-expiry-hours", type=int, default=4)
+    state_review_card.add_argument("--refs", action="store_true", help="Show evidence refs for each candidate.")
+    state_review_card.add_argument("--json", action="store_true", help="Print machine-readable review-card JSON.")
+    state_review_card.set_defaults(func=state_review_card_command)
     state_diff = state_subparsers.add_parser("diff", help="Create a State Patch proposal from evidence.")
     state_diff.add_argument("--summary", required=True)
     state_diff.add_argument("--content")
@@ -1162,6 +1318,18 @@ def build_parser() -> argparse.ArgumentParser:
     state_working_reject.add_argument("working_id")
     state_working_reject.add_argument("--reason")
     state_working_reject.set_defaults(func=state_working_reject_command)
+    state_working_edit = state_subparsers.add_parser(
+        "working-edit",
+        help="Edit a Working State item before accepting or rejecting it.",
+    )
+    state_working_edit.add_argument("working_id")
+    state_working_edit.add_argument("--statement")
+    state_working_edit.add_argument("--reason")
+    state_working_edit.add_argument("--scope")
+    state_working_edit.add_argument("--review-after")
+    state_working_edit.add_argument("--expires-at")
+    state_working_edit.add_argument("--updated-by", default="user")
+    state_working_edit.set_defaults(func=state_working_edit_command)
 
     agent_parser = subparsers.add_parser("agent", help="Read Current State for prompt injection.")
     agent_subparsers = agent_parser.add_subparsers(dest="agent_command", required=True)

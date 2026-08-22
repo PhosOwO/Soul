@@ -81,6 +81,7 @@ def route_working_state_from_evidence(
         routed = {
             "route": route if route in {"no_state", "working_state"} else "no_state",
             "review_candidate": bool(explicit.get("review_candidate", True)),
+            "review_card": bool(explicit.get("review_card", False)),
             "statement": compact_text(str(explicit.get("statement") or ""), 320),
             "reason": compact_text(str(explicit.get("reason") or ""), 240),
             "scope": compact_text(str(explicit.get("scope") or evidence.get("task") or ""), 120),
@@ -113,6 +114,7 @@ def route_working_state_from_evidence(
     return {
         "route": "working_state",
         "review_candidate": bool(routed.get("review_candidate", True)),
+        "review_card": bool(routed.get("review_card", False)),
         "statement": statement,
         "reason": reason,
         "scope": scope,
@@ -325,6 +327,7 @@ def working_item_from_route(route: dict[str, Any], evidence: dict[str, Any]) -> 
         "reason": str(route.get("reason") or ""),
         "scope": str(route.get("scope") or ""),
         "review_candidate": bool(route.get("review_candidate", True)),
+        "review_card": bool(route.get("review_card", False)),
         "evidence_refs": cast(list[dict[str, Any]], route.get("evidence_refs") or []),
         "source": str(evidence.get("source") or ""),
         "task": str(evidence.get("task") or ""),
@@ -497,6 +500,50 @@ def expire_working_item(project_dir: Path | None, working_id: str, *, reason: st
 
 def reject_working_item(project_dir: Path | None, working_id: str, *, reason: str = "") -> WorkingStateItem:
     return set_working_item_status(project_dir, working_id, status=WORKING_STATUS_REJECTED, reason=reason)
+
+
+def edit_working_item(
+    project_dir: Path | None,
+    working_id: str,
+    *,
+    statement: str | None = None,
+    reason: str | None = None,
+    scope: str | None = None,
+    review_after: str | None = None,
+    expires_at: str | None = None,
+    updated_by: str = "user",
+) -> WorkingStateItem:
+    project = project_dir or Path.cwd()
+    doc = load_working_state(project)
+    item = next((candidate for candidate in doc.get("items", []) if candidate.get("id") == working_id), None)
+    if item is None:
+        raise ValueError(f"Working State item not found: {working_id}")
+    before = dict(item)
+    if statement is not None:
+        item["statement"] = compact_text(statement, 320)
+    if reason is not None:
+        item["reason"] = compact_text(reason, 240)
+    if scope is not None:
+        item["scope"] = compact_text(scope, 120)
+    if review_after is not None:
+        item["review_after"] = resolve_review_after(review_after)
+    if expires_at is not None:
+        item["expires_at"] = resolve_expiry(expires_at)
+    item["updated_at"] = utc_now()
+    doc["updated_at"] = utc_now()
+    save_working_state(doc, project)
+    append_working_event(
+        {
+            "event": "edited",
+            "created_at": utc_now(),
+            "working_id": working_id,
+            "updated_by": updated_by,
+            "before": before,
+            "after": item,
+        },
+        project,
+    )
+    return item
 
 
 def set_working_item_status(

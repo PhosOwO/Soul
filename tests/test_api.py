@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from http.server import ThreadingHTTPServer
+from threading import Thread
+from urllib.request import urlopen
 
 import pytest
 
-from soul.api import SoulApi
+from soul.api import SoulApi, make_handler
 from soul.adapters.reme import ReMeJobResult
+from soul.services.state_core.proposals import propose_patch
+from soul.services.state_core.state_store import append_patch_proposal, load_patch_proposals
 from soul.services.state import load_state
 from soul.services.state_core.working_state import upsert_working_state_from_evidence
 
@@ -51,6 +56,85 @@ def test_soul_api_get_state_includes_unconfirmed_working_state(tmp_path):
     assert "Use Accepted State as confirmed project cognition" in payload["injection"]
     assert "Working State, unconfirmed:" in payload["injection"]
     assert "SST-first Qnet/STR" in payload["injection"]
+
+
+def test_soul_api_review_page_and_card_endpoint(tmp_path):
+    load_state(tmp_path, project_name="Demo")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        review = urlopen(base + "/review", timeout=5).read().decode("utf-8")
+        card = json.loads(urlopen(base + "/review-card", timeout=5).read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert "Soul Review" in review
+    assert "Ready to Confirm" in review
+    assert card["has_reviewable_content"] is False
+
+
+def test_soul_api_review_accept_patch_applies_and_removes_candidate(tmp_path):
+    state = load_state(tmp_path, project_name="Demo")
+    proposal = propose_patch(
+        state,
+        {
+            "source": "test",
+            "summary": "Use pnpm in this project.",
+            "state_item": {
+                "id": "prefer-pnpm",
+                "kind": "active_constraint",
+                "statement": "Use pnpm for dependency commands in this project.",
+            },
+        },
+    )
+    append_patch_proposal(proposal, tmp_path)
+    api = SoulApi(tmp_path)
+
+    assert api.review_card()["counts"]["ready_to_confirm"] == 1
+    result = api.accept_review_candidate(f"patch:{proposal['id']}", confirmed_by="test")
+
+    assert result["result"]["state"]["version"] == 2
+    assert api.review_card()["has_reviewable_content"] is False
+    assert load_patch_proposals(tmp_path)[-1]["status"] == "applied"
+
+
+def test_soul_api_review_edit_snooze_and_reject_working_state(tmp_path):
+    load_state(tmp_path, project_name="Demo")
+    result = upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "dependency setup",
+            "summary": "后续默认使用 npm。",
+            "evidence_refs": [{"type": "reme_file", "path": "daily/2026-08-22/review.md"}],
+            "working_state": {
+                "route": "working_state",
+                "statement": "后续默认使用 npm。",
+                "reason": "旧判断。",
+                "scope": "dependency setup",
+                "review_after": "2000-01-01T00:00:00Z",
+                "review_card": True,
+            },
+        },
+    )
+    api = SoulApi(tmp_path)
+    candidate_id = f"working:{result['item']['id']}"
+
+    edited = api.edit_review_candidate(
+        candidate_id,
+        {"statement": "后续默认使用 pnpm。", "reason": "用户纠正为 pnpm。", "scope": "dependency setup"},
+    )
+    assert edited["edited"]["statement"] == "后续默认使用 pnpm。"
+    assert api.review_card()["counts"]["ready_to_confirm"] == 1
+
+    api.snooze_review_candidate(candidate_id, hours=24)
+    assert api.review_card()["has_reviewable_content"] is False
+
+    rejected = api.reject_review_candidate(candidate_id, reason="not durable", rejected_by="test")
+    assert rejected["rejected"]["status"] == "rejected"
 
 
 def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatch):
