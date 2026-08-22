@@ -4,9 +4,9 @@ This demo uses a sandbox project that represents one real engineering thread: im
 
 ## Video
 
-<video src="media/demo.mp4" controls width="100%"></video>
+![Review Card demo](media/demo.gif)
 
-If the video does not render in your Markdown viewer, open [docs/media/demo.mp4](media/demo.mp4) directly.
+Open [docs/media/demo.mp4](media/demo.mp4) for the original recording.
 
 ## Setup
 
