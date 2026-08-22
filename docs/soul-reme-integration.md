@@ -133,15 +133,38 @@ into a Soul State Patch and that patch is accepted or intentionally surfaced as 
 
 ### After Turn
 
-1. The host calls `observe_evidence` with a stable `session_id`, task/outcome text, and normalized messages/events.
+After-turn hooks should not block the host agent. The synchronous hook path only records enough local data for later
+processing:
+
+1. The host captures a stable `session_id`, optional `turn_id`, task/outcome text, and normalized messages/events.
+2. Soul appends a `turn_evidence` job to `.soul/state/queue/jobs.jsonl`.
+3. Soul appends a hook heartbeat to `.soul/state/hook_runs.jsonl`.
+4. The hook best-effort starts `soul queue drain --project-dir <project> --limit 3` in a detached background process.
+5. The hook returns immediately. If background start fails, the queued job remains available for manual `soul queue drain`.
+
+Session identity is resolved once at the host boundary:
+
+1. Prefer explicit host IDs: `session_id`, `conversation_id`, `thread_id`, `chat_id`, then `run_id`.
+2. If only a human-readable name exists, hash `session_name`, `thread_name`, or `conversation_name` with host and project
+   path.
+3. If the host provides no session signal, use `soul-<host>-<project-hash>-<YYYYMMDD>`.
+
+The asynchronous drain path performs the expensive work:
+
+1. Select runnable queue jobs using FIFO over runnable jobs.
 2. Soul preflights ReMe:
    - `reme` CLI exists.
-   - a compatible ReMe service is discoverable or startable.
    - `.soul/reme/` exists and has the native ReMe workspace layout.
-   - LLM configuration is available when model-powered jobs are requested.
+   - `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL_NAME` are visible to `auto_memory`.
+   - Soul resolves these from process env, global `$SOUL_HOME/.env` or the default user `.soul/.env`, project `.env`,
+     or readable Codex/TraeX OpenAI-compatible provider config.
+   - Project `.env` overrides the global Soul env file when a project needs different ReMe model settings.
+   - `soul reme init-config --scope global` creates the global template; `--scope project` creates a project `.env`.
+   - Soul does not read private Codex/TraeX login state or managed-provider token caches; only explicit
+     OpenAI-compatible config and environment references are reused.
 3. Soul records the episode through ReMe:
-   - Preferred: `reme auto_memory session_id=... messages=... memory_hint=... date=...`.
-   - Fallback only when explicitly configured: `reme write` or the existing `daily_write` job.
+   - Preferred: `reme start job=auto_memory workspace_dir=.soul/reme session_id=... messages=... memory_hint=... date=...`.
+   - Fallback only when explicitly configured: `write_mode=fallback_daily_write`, using the existing `daily_write` job.
 4. Soul searches related memory:
    - `reme search query=... limit=...`
    - include direct refs to newly written daily/session paths even when search returns no result yet.
@@ -152,22 +175,62 @@ into a Soul State Patch and that patch is accepted or intentionally surfaced as 
 6. Soul proposes a State Patch whose evidence body contains refs and summary only.
 7. The patch is not applied automatically. Applying the patch updates `state.json` and `STATE.md`.
 
+### Queue Scheduling
+
+Soul queue scheduling v1 is FIFO over runnable jobs:
+
+1. Jobs are ordered by append order in `.soul/state/queue/jobs.jsonl`.
+2. `completed` jobs are skipped.
+3. `blocked` and `dead_letter` jobs are skipped and do not block later jobs.
+4. `failed` retryable jobs re-enter FIFO only after `next_run_at`.
+5. `started` jobs that have not timed out are skipped.
+6. `started` jobs that exceeded the stale timeout can be retried.
+7. New jobs do not preempt older runnable jobs.
+8. v1 does not use priority.
+9. v1 does not coalesce consecutive turns by default.
+
+This preserves conversation time order while preventing an old blocked job from freezing the queue.
+
 ### Host Integration Modes
 
 | Host | Before turn | After turn | Manual tools |
 |------|-------------|------------|--------------|
-| DeepSeek Harness | HTTP before-turn plugin calls `/state` | HTTP after-turn plugin calls `/reme/transition/propose` | HTTP endpoints |
-| Codex | MCP `get_projected_state` | MCP `observe_evidence` | MCP tools |
-| TraeX | `UserPromptSubmit` project hook injects Soul Current State | `Stop` project hook records ReMe-backed evidence | Project MCP server exposes Soul tools |
+| DeepSeek Harness | Follow-up: add stable prompt/context hook when available | HTTP after-turn plugin calls `/evidence/enqueue` | HTTP endpoints |
+| Codex | MCP `get_projected_state` | MCP `observe_evidence` enqueues evidence | MCP tools |
+| TraeX | `UserPromptSubmit` project hook injects Soul Current State | `Stop` project hook enqueues evidence and starts background drain | Project MCP server exposes Soul tools |
+
+Soul's hook behavior is host-neutral. The reusable entrypoints are:
+
+```text
+soul hook user-prompt-submit --host <traex|codex|dsh|generic>
+soul hook stop --host <traex|codex|dsh|generic>
+```
+
+Both commands read a host payload as JSON from stdin. `user-prompt-submit` returns a Soul Current State injection.
+`stop` enqueues completed-turn evidence and returns immediately. Host-specific integrations should only adapt payload
+shape and output expectations; they should not reimplement state retrieval, evidence enqueueing, background drain, or
+heartbeat writing.
 
 TraeX uses project resources under `.trae/`:
 
 - `.trae/.mcp.json` registers `soul-mcp`.
 - `.trae/hooks.json` registers `UserPromptSubmit` and `Stop` command hooks.
-- `.trae/hooks/soul_user_prompt_submit.py` reads Soul Current State and returns hook `additionalContext`.
-- `.trae/hooks/soul_stop.py` records the completed turn through `propose_reme_transition`.
+- `.trae/hooks/soul_user_prompt_submit.py` is a thin TraeX wrapper around `soul hook user-prompt-submit --host traex`.
+- `.trae/hooks/soul_stop.py` is a thin TraeX wrapper around `soul hook stop --host traex`.
+- User-level TraeX config installed by `soul traex install --scope user` calls `bin/soul.js hook ...` directly, so it
+  uses the same runtime without depending on project `.trae/hooks` files.
 
 The TraeX hooks must be visible in `/hooks` and trusted before they run. The MCP server should be visible in `/mcp`.
+
+DeepSeek Harness uses a generated Cordis patch:
+
+```text
+soul dsh install --project-dir .
+dsh web --patch .soul/dsh/soul.patch.yml
+```
+
+The patch loads `soul/adapters/dsh_plugin.mjs`, which listens for `agent/turn-stopping` and enqueues evidence through
+the same `/evidence/enqueue` contract.
 
 ### Consolidation
 
@@ -194,7 +257,7 @@ The adapter should move from a low-level job wrapper toward ReMe's public agent-
 | Method | Preferred ReMe operation | Notes |
 |--------|--------------------------|-------|
 | `preflight()` | `command -v reme`, `reme find_reme`, `reme health_check` | Distinguish missing CLI, stopped service, unhealthy service, and missing LLM config. |
-| `auto_memory()` | `reme auto_memory` | Main conversation persistence path. Requires LLM config. |
+| `auto_memory()` | `reme start job=auto_memory` | Main conversation persistence path. Requires LLM config. |
 | `search()` | `reme search` | Default retrieval uses BM25 and wikilinks; vectors are optional. |
 | `read()` | `reme read` | Reads Markdown paths and line ranges from evidence refs. |
 | `traverse()` | `reme traverse` | Explores wikilink neighbors for causality and related context. |
@@ -202,8 +265,9 @@ The adapter should move from a low-level job wrapper toward ReMe's public agent-
 | `proactive()` | `reme proactive` | Reads `interests.yaml`; no LLM call. |
 | `reindex()` | `reme reindex` | Repairs derived metadata without rewriting user memory files. |
 
-The existing `daily_write` path remains a legacy fallback, not the primary integration. It can be useful for offline tests
-or deployments that intentionally avoid LLM-powered `auto_memory`.
+The existing `daily_write` path is a ReMe-side fallback, not a separate Soul evidence path. Soul still routes host evidence
+through `/reme/transition/propose`; the fallback only changes how the ReMe adapter writes session memory when the caller
+explicitly sets `write_mode=fallback_daily_write`.
 
 ## API and MCP Contract
 
@@ -237,6 +301,25 @@ Inputs:
 - `reme.memory_hint`: optional guidance for `auto_memory`.
 
 Outputs:
+
+- `memory_mode`
+- `queued`
+- `job_id`
+- `session_id`
+- `turn_id`
+- `background_drain_started`
+- `queue_path`
+
+`background_drain_started` only means Soul started a background drain process. Real consumption success is recorded later
+as a `completed` event in `.soul/state/queue/events.jsonl`, usually with a `patch_id`.
+
+### Explicit ReMe Transition
+
+`POST /reme/transition/propose` and `SoulApi.propose_reme_transition(...)` remain explicit synchronous entrypoints for
+tests, debugging, and controlled tools that intentionally want to wait for ReMe and receive a patch proposal immediately.
+Default host integrations should prefer `observe_evidence` / `/evidence/enqueue`.
+
+Synchronous outputs:
 
 - `memory_mode`
 - `reme_write`: job result metadata from `auto_memory` or fallback write path.
@@ -340,14 +423,15 @@ Soul patch evidence may include a compact list of these refs, but not the full m
 1. Add adapter methods for `auto_memory`, `traverse`, `auto_dream`, `proactive`, and service discovery.
 2. Keep `daily_write` as `write_mode=fallback_daily_write`.
 3. Extend tests with fake ReMe adapter results for each operation.
-4. Keep existing `observe_evidence` response fields stable where possible.
+4. Keep explicit synchronous transition responses stable for controlled tools.
 
-### Phase 2: Default Write Path
+### Phase 2: Default Host Write Path
 
-1. Change `propose_reme_transition` to call `auto_memory` by default.
+1. Route host after-turn evidence through `observe_evidence` / `/evidence/enqueue` by default.
 2. Require or synthesize a stable `session_id`.
 3. Accept normalized `messages` in MCP/HTTP.
-4. Add direct refs from `auto_memory` output to avoid relying only on immediate search results.
+4. Let the queue worker call `propose_reme_transition`, which calls `auto_memory` by default.
+5. Add direct refs from `auto_memory` output to avoid relying only on immediate search results.
 
 ### Phase 3: Evidence Reading Tools
 
@@ -371,8 +455,8 @@ Soul patch evidence may include a compact list of these refs, but not the full m
 
 Unit tests should not require a real ReMe service. Use fake adapter results to verify Soul contracts:
 
-- `observe_evidence` calls `auto_memory` by default.
-- `write_mode=fallback_daily_write` uses the legacy path.
+- `observe_evidence` enqueues evidence by default and does not call ReMe synchronously.
+- `write_mode=fallback_daily_write` still goes through the ReMe transition contract and writes daily ReMe memory directly.
 - missing LLM config for `auto_memory` fails with a typed setup error.
 - search results plus link expansion become evidence refs.
 - direct write refs are retained when search returns no results.
@@ -383,11 +467,15 @@ Unit tests should not require a real ReMe service. Use fake adapter results to v
 
 Integration tests may run against a real ReMe install only when `REME_INTEGRATION=1` is set.
 
+## Settled Defaults
+
+1. Soul keeps ReMe files under project-local `.soul/reme/`.
+2. Default host integrations enqueue evidence and return without waiting for ReMe.
+3. Queue workers call `auto_memory` by default.
+4. `daily_write` is only available through explicit `write_mode=fallback_daily_write`.
+5. Missing `auto_memory` LLM configuration fails clearly; Soul does not silently downgrade writes.
+
 ## Open Decisions
 
 1. Should Soul automatically start a ReMe service, or only use an existing healthy service?
 2. Should `auto_dream` be exposed only as explicit command/tool, or also as a scheduled background task managed by Soul?
-3. Should `.soul/reme/` remain the default workspace, or should users be encouraged to set a shared absolute ReMe
-   workspace when multiple projects should share memory?
-4. Should failed `auto_memory` calls block patch proposal creation, or should Soul allow explicit fallback writes in
-   low-capability environments?
