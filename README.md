@@ -50,6 +50,8 @@ soul review mock --reset
 soul --review --review-project-dir .soul/sandboxes/review-mock --review-port 8766 --review-restart
 ```
 
+For a short recording and screenshot walkthrough, see [Review Card Demo](docs/review-card-demo.md).
+
 ## 🧠 ReMe Setup
 
 Soul uses project-local ReMe storage at `.soul/reme/`. Package installation does not create this directory; it is created when ReMe preflight/start or evidence writing runs.

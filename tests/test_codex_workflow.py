@@ -238,7 +238,7 @@ def test_dsh_install_writes_patch_overlay(tmp_path: Path) -> None:
     assert "- id: soul" in text
     assert "dsh_plugin.mjs" in text
     assert 'baseUrl: "http://127.0.0.1:9876"' in text
-    assert f'projectDir: "{tmp_path}"' in text
+    assert f"projectDir: {json.dumps(str(tmp_path))}" in text
     assert "searchLimit: 7" in text
 
 

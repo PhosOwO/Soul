@@ -14,8 +14,10 @@ def test_review_mock_creates_sandbox_review_candidates(tmp_path):
     card = build_review_card(target)
 
     assert result["project_dir"] == str(target)
-    assert card["counts"]["ready_to_confirm"] == 2
+    assert len(result["patch_ids"]) == 4
+    assert card["counts"]["ready_to_confirm"] == 4
     assert card["counts"]["needs_review"] == 1
+    assert card["counts"]["available"] == 6
     assert not (tmp_path / ".soul").exists()
 
 
