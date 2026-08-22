@@ -97,8 +97,41 @@ def test_soul_api_review_accept_patch_applies_and_removes_candidate(tmp_path):
     result = api.accept_review_candidate(f"patch:{proposal['id']}", confirmed_by="test")
 
     assert result["result"]["state"]["version"] == 2
+    accepted = next(item for item in result["result"]["state"]["current_state"]["state_items"] if item["id"] == "prefer-pnpm")
+    assert accepted["status"] == "accepted"
     assert api.review_card()["has_reviewable_content"] is False
     assert load_patch_proposals(tmp_path)[-1]["status"] == "applied"
+
+
+def test_soul_api_review_accept_working_state_writes_accepted_state_item(tmp_path):
+    load_state(tmp_path, project_name="Demo")
+    result = upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "Review Card UI",
+            "summary": "当前不再把 Review Card 设计成完整 project state dashboard。",
+            "evidence_refs": [{"type": "reme_file", "path": "daily/2026-08-22/review.md"}],
+            "working_state": {
+                "route": "working_state",
+                "statement": "当前不再把 Review Card 设计成完整 project state dashboard。",
+                "reason": "用户确认低打扰确认队列才是目标。",
+                "scope": "Review Card UI",
+                "review_after": "2000-01-01T00:00:00Z",
+                "review_card": True,
+            },
+        },
+    )
+    api = SoulApi(tmp_path)
+
+    accepted = api.accept_review_candidate(f"working:{result['item']['id']}", confirmed_by="test")
+
+    item = next(
+        state_item
+        for state_item in accepted["result"]["state"]["current_state"]["state_items"]
+        if state_item["statement"] == "当前不再把 Review Card 设计成完整 project state dashboard。"
+    )
+    assert item["status"] == "accepted"
 
 
 def test_soul_api_review_edit_snooze_and_reject_working_state(tmp_path):

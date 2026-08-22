@@ -112,6 +112,7 @@ def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch)
     assert not (tmp_path / ".soul" / "state" / "patch_proposals.jsonl").exists()
     summary = queue_status(tmp_path)
     assert summary.completed == 1
+    assert summary.last_completed is not None
     assert summary.last_completed["working_state_id"] == "working_1"
 
 

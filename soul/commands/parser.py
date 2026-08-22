@@ -34,7 +34,9 @@ from soul.services.integrations.queue import drain_queue, queue_status
 from soul.services.integrations.reflection import reflect_episode
 from soul.services.reme.runtime_config import resolve_reme_runtime_config, soul_home
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
-from soul.services.state_core.review_card import build_review_card
+from soul.services.state_core.review.mock import create_review_mock_project
+from soul.services.state_core.review.card import build_review_card
+from soul.services.state_core.audit.state import audit_state
 from soul.services.state_core.state_render import format_state_context
 from soul.services.state_core.state_store import (
     append_patch_proposal,
@@ -300,6 +302,27 @@ def state_review_card_command(args: argparse.Namespace) -> None:
         print(json.dumps(card, ensure_ascii=False, indent=2))
         return
     print(format_review_card(card, show_refs=args.refs))
+
+
+def state_audit_command(args: argparse.Namespace) -> None:
+    audit = audit_state(Path.cwd())
+    if args.json:
+        print(json.dumps(audit, ensure_ascii=False, indent=2))
+        return
+    print(format_state_audit(audit))
+
+
+def review_mock_command(args: argparse.Namespace) -> None:
+    target = Path(args.target)
+    result = create_review_mock_project(target, reset=args.reset)
+    print(f"Created Soul Review mock sandbox: {result['project_dir']}")
+    print(f"Patch: {result['patch_id']}")
+    print("Working State:")
+    for working_id in result["working_ids"]:
+        print(f"- {working_id}")
+    print("")
+    print("Open it with:")
+    print(f"  soul --review --review-project-dir {shell_quote(str(target))} --review-port {args.port} --review-restart")
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
@@ -1026,7 +1049,8 @@ def format_patch_review(proposal: Mapping[str, Any], *, show_refs: bool = False)
 
 
 def format_review_card(card: Mapping[str, Any], *, show_refs: bool = False) -> str:
-    counts = card.get("counts") if isinstance(card.get("counts"), Mapping) else {}
+    raw_counts = card.get("counts")
+    counts = raw_counts if isinstance(raw_counts, Mapping) else {}
     lines = [
         f"Soul Review Card · {card.get('project', 'unknown')}",
         f"{counts.get('total', 0)} candidate(s): {counts.get('ready_to_confirm', 0)} ready, {counts.get('needs_review', 0)} need review",
@@ -1044,6 +1068,34 @@ def format_review_card(card: Mapping[str, Any], *, show_refs: bool = False) -> s
     return "\n".join(lines)
 
 
+def format_state_audit(audit: Mapping[str, Any]) -> str:
+    raw_summary = audit.get("summary")
+    summary = raw_summary if isinstance(raw_summary, Mapping) else {}
+    raw_issues = audit.get("issues")
+    issues = raw_issues if isinstance(raw_issues, list) else []
+    lines = [
+        f"Soul State Audit · {audit.get('project', 'unknown')}",
+        f"Project dir: {audit.get('project_dir', '')}",
+        "",
+        "Summary:",
+        f"- state version: {summary.get('state_version', 'unknown')}",
+        f"- state items: {summary.get('state_items', 0)}",
+        f"- working items: {summary.get('working_items', 0)} ({summary.get('active_working_items', 0)} active)",
+        f"- patch records: {summary.get('patch_records', 0)}",
+        f"- latest patches: {summary.get('latest_patch_proposed', 0)} proposed, {summary.get('latest_patch_applied', 0)} applied, {summary.get('latest_patch_rejected', 0)} rejected",
+        "",
+        "Issues:",
+    ]
+    if not issues:
+        lines.append("- none")
+        return "\n".join(lines)
+    for issue in issues:
+        if not isinstance(issue, Mapping):
+            continue
+        lines.append(f"- [{issue.get('severity', 'info')}] {issue.get('code', 'unknown')}: {issue.get('message', '')}")
+    return "\n".join(lines)
+
+
 def format_review_card_section(title: str, raw_candidates: Any, *, show_refs: bool = False) -> list[str]:
     candidates = raw_candidates if isinstance(raw_candidates, list) else []
     lines = [title + ":"]
@@ -1057,8 +1109,10 @@ def format_review_card_section(title: str, raw_candidates: Any, *, show_refs: bo
         lines.append(f"- [{candidate.get('recommended_action', 'review')}] {candidate.get('statement', '')}")
         lines.append(f"  actions: {', '.join(str(action) for action in candidate.get('actions', []))}")
         if show_refs:
-            evidence = candidate.get("evidence") if isinstance(candidate.get("evidence"), Mapping) else {}
-            refs = evidence.get("refs") if isinstance(evidence.get("refs"), list) else []
+            raw_evidence = candidate.get("evidence")
+            evidence = raw_evidence if isinstance(raw_evidence, Mapping) else {}
+            raw_refs = evidence.get("refs")
+            refs = raw_refs if isinstance(raw_refs, list) else []
             lines.append(f"  reason: {candidate.get('review_reason', '')}")
             lines.append(f"  source: {candidate.get('source_type', 'unknown')} {candidate.get('source_id', '')}")
             lines.append(f"  evidence summary: {evidence.get('summary', '')}")
@@ -1247,11 +1301,22 @@ def build_parser() -> argparse.ArgumentParser:
     hook_stop.add_argument("--host", choices=hook_hosts, default="generic")
     hook_stop.set_defaults(func=hook_stop_command)
 
+    review_parser = subparsers.add_parser("review", help="Review UI helper commands.")
+    review_subparsers = review_parser.add_subparsers(dest="review_command", required=True)
+    review_mock = review_subparsers.add_parser("mock", help="Create a sandbox project with mock Review Card data.")
+    review_mock.add_argument("--target", default=".soul/sandboxes/review-mock")
+    review_mock.add_argument("--reset", action="store_true", help="Reset the target sandbox before writing mock data.")
+    review_mock.add_argument("--port", type=int, default=8766)
+    review_mock.set_defaults(func=review_mock_command)
+
     state_parser = subparsers.add_parser("state", help="Inspect and update Current State.")
     state_subparsers = state_parser.add_subparsers(dest="state_command", required=True)
     state_show = state_subparsers.add_parser("show", help="Print Current State.")
     state_show.add_argument("--limit", type=int, default=10)
     state_show.set_defaults(func=state_show_command)
+    state_audit = state_subparsers.add_parser("audit", help="Check .soul/state consistency.")
+    state_audit.add_argument("--json", action="store_true")
+    state_audit.set_defaults(func=state_audit_command)
     state_review = state_subparsers.add_parser("review", help="Review proposed knowledge before it enters Current State.")
     state_review.add_argument("proposal_id", nargs="?")
     state_review.add_argument("--limit", type=int, default=5)

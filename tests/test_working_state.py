@@ -202,4 +202,4 @@ def test_conflicting_working_state_is_reviewable_but_not_projected(tmp_path):
     assert result["item"]["status"] == WORKING_STATUS_CONFLICT_NEEDS_REVIEW
     assert result["item"]["conflicts_with"] == ["mhw-current-mainline"]
     assert project_working_state_items(tmp_path, task="MHW 漏报诊断") == []
-    assert review_working_items(tmp_path)[0]["id"] == result["item"]["id"]
+    assert review_working_items(tmp_path)[0].get("id") == result["item"]["id"]

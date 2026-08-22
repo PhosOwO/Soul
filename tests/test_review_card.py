@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from soul.services.shared.constants import PATCH_STATUS_REJECTED, WORKING_STATUS_CONFLICT_NEEDS_REVIEW
 from soul.services.state_core.proposals import append_patch_status, propose_patch
-from soul.services.state_core.review_card import build_review_card
+from soul.services.state_core.review.card import build_review_card
 from soul.services.state_core.state_store import append_patch_proposal, load_state
 from soul.services.state_core.working_state import edit_working_item, upsert_working_state_from_evidence
 
@@ -173,7 +173,7 @@ def test_edit_working_item_updates_fields_and_keeps_reviewable(tmp_path):
     )
     card = build_review_card(tmp_path)
 
-    assert edited["statement"] == "后续默认使用 pnpm。"
-    assert edited["reason"] == "用户明确纠正为 pnpm。"
+    assert edited.get("statement") == "后续默认使用 pnpm。"
+    assert edited.get("reason") == "用户明确纠正为 pnpm。"
     assert card["ready_to_confirm"][0]["source_id"] == result["item"]["id"]
     assert "pnpm" in card["ready_to_confirm"][0]["statement"]

@@ -141,9 +141,12 @@ def patch_statement(proposal: PatchProposal) -> str:
 
 
 def proposal_evidence(proposal: PatchProposal) -> dict[str, Any]:
-    refs = proposal.get("refs") if isinstance(proposal.get("refs"), dict) else {}
-    evidence_refs = refs.get("evidence_refs") if isinstance(refs.get("evidence_refs"), list) else []
-    raw = refs.get("raw_evidence") if isinstance(refs.get("raw_evidence"), dict) else {}
+    raw_refs = proposal.get("refs")
+    refs = raw_refs if isinstance(raw_refs, dict) else {}
+    raw_evidence_refs = refs.get("evidence_refs")
+    evidence_refs = raw_evidence_refs if isinstance(raw_evidence_refs, list) else []
+    raw_raw_evidence = refs.get("raw_evidence")
+    raw = raw_raw_evidence if isinstance(raw_raw_evidence, dict) else {}
     return {
         "summary": compact_text(str(raw.get("summary") or proposal.get("why_remember") or ""), 200),
         "refs": evidence_refs,

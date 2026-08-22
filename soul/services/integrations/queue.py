@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -31,6 +32,8 @@ STALE_STARTED_AFTER_SECONDS = 300
 LOCK_STALE_AFTER_SECONDS = 300
 APPEND_LOCK_TIMEOUT_SECONDS = 5.0
 APPEND_LOCK_POLL_SECONDS = 0.01
+_APPEND_LOCKS_GUARD = threading.Lock()
+_APPEND_LOCKS: dict[Path, threading.Lock] = {}
 
 QueueEventName = Literal["queued", "started", "completed", "failed", "blocked", "dead_letter"]
 
@@ -404,8 +407,18 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def append_jsonl(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with jsonl_append_lock(path), path.open("a", encoding="utf-8") as stream:
+    with process_append_lock(path), jsonl_append_lock(path), path.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def process_append_lock(path: Path) -> threading.Lock:
+    resolved = path.resolve()
+    with _APPEND_LOCKS_GUARD:
+        lock = _APPEND_LOCKS.get(resolved)
+        if lock is None:
+            lock = threading.Lock()
+            _APPEND_LOCKS[resolved] = lock
+        return lock
 
 
 class jsonl_append_lock:

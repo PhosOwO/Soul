@@ -342,17 +342,18 @@ def working_item_from_route(route: dict[str, Any], evidence: dict[str, Any]) -> 
 
 def merge_or_append_working_item(doc: WorkingStateDoc, item: WorkingStateItem) -> list[str]:
     superseded: list[str] = []
-    new_key = normalize_for_compare(item["statement"])
+    new_key = normalize_for_compare(str(item.get("statement") or ""))
     for existing in doc.get("items", []):
         existing_key = normalize_for_compare(str(existing.get("statement") or ""))
         same_scope = str(existing.get("scope") or "") == item.get("scope")
-        if existing.get("id") == item["id"] or (same_scope and existing_key and (existing_key in new_key or new_key in existing_key)):
+        item_id = str(item.get("id") or "")
+        if existing.get("id") == item_id or (same_scope and existing_key and (existing_key in new_key or new_key in existing_key)):
             superseded.append(str(existing.get("id") or ""))
             merged_refs = merge_refs(
                 cast(list[dict[str, Any]], existing.get("evidence_refs") or []),
                 cast(list[dict[str, Any]], item.get("evidence_refs") or []),
             )
-            created_at = str(existing.get("created_at") or item["created_at"])
+            created_at = str(existing.get("created_at") or item.get("created_at") or utc_now())
             existing.update(item)
             existing["created_at"] = created_at
             existing["updated_at"] = utc_now()
@@ -412,8 +413,8 @@ def project_working_state_items(
     if task:
         relevant = [
             item for item in active
-            if state_item_matches_task({"statement": item.get("statement", ""), "kind": "working_state"}, task)
-            or state_item_matches_task({"statement": item.get("scope", ""), "kind": "working_state"}, task)
+            if state_item_matches_task({"id": str(item.get("id") or ""), "statement": item.get("statement", ""), "kind": "working_state"}, task)
+            or state_item_matches_task({"id": str(item.get("id") or ""), "statement": item.get("scope", ""), "kind": "working_state"}, task)
         ]
         if relevant:
             active = relevant

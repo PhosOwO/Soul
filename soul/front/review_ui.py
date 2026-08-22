@@ -305,7 +305,10 @@ def render_review_page() -> str:
       );
       if (!card.has_reviewable_content) {
         content.className = "empty";
-        content.textContent = "No high-quality state decisions to review.";
+        content.replaceChildren(
+          emptyLine("No review decisions"),
+          emptyLine("Current state may still have accepted items."),
+        );
         return;
       }
       content.className = "";
@@ -319,6 +322,12 @@ def render_review_page() -> str:
     function pill(text, kind = "") {
       const element = document.createElement("span");
       element.className = `pill ${kind}`;
+      element.textContent = text;
+      return element;
+    }
+
+    function emptyLine(text) {
+      const element = document.createElement("div");
       element.textContent = text;
       return element;
     }
