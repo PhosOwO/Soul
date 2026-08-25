@@ -123,7 +123,32 @@ def test_review_card_splits_marked_due_and_conflict_working_state(tmp_path):
     assert conflict["item"]["status"] == WORKING_STATUS_CONFLICT_NEEDS_REVIEW
 
 
-def test_review_card_filters_unmarked_due_working_state(tmp_path):
+def test_review_card_shows_due_working_state_as_needs_review(tmp_path):
+    result = upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "Review Card UI",
+            "summary": "后续回答默认把 Review Card 当成低打扰确认队列。",
+            "evidence_refs": evidence_refs(),
+            "working_state": {
+                "route": "working_state",
+                "statement": "后续回答默认把 Review Card 当成低打扰确认队列。",
+                "reason": "产品定义复述，不需要提醒。",
+                "scope": "Soul Review Card UX",
+                "review_after": (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            },
+        },
+    )
+
+    card = build_review_card(tmp_path)
+
+    assert card["counts"]["needs_review"] == 1
+    assert card["needs_review"][0]["source_id"] == result["item"]["id"]
+    assert card["needs_review"][0]["recommended_action"] == "review"
+
+
+def test_review_card_filters_non_review_candidate_working_state(tmp_path):
     upsert_working_state_from_evidence(
         tmp_path,
         {
@@ -137,6 +162,7 @@ def test_review_card_filters_unmarked_due_working_state(tmp_path):
                 "reason": "产品定义复述，不需要提醒。",
                 "scope": "Soul Review Card UX",
                 "review_after": (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                "review_candidate": False,
             },
         },
     )

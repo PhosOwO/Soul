@@ -173,6 +173,8 @@ def working_state_candidates(
         status = str(item.get("status") or "")
         if status not in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
             continue
+        if not bool(item.get("review_candidate", False)):
+            continue
         due = is_due(str(item.get("review_after") or ""), now=now)
         near_expiry = is_near_expiry(str(item.get("expires_at") or ""), hours=near_expiry_hours, now=now)
         review_card = bool(item.get("review_card", False))
@@ -193,6 +195,11 @@ def working_state_candidates(
             recommended_action = "accept"
             reason = "Working State was explicitly marked as worth confirming in the low-noise review card."
             score = 75
+        elif due:
+            bucket = "needs_review"
+            recommended_action = "review"
+            reason = "Working State is due for review; decide whether to accept, reject, or snooze it."
+            score = 65
         else:
             continue
         candidates.append(working_candidate(item, bucket, recommended_action, reason, score))
