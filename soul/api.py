@@ -27,10 +27,13 @@ from soul.services.reme.reme_transition import propose_reme_transition as propos
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
+from soul.services.project_resolver import register_project, resolve_project_dir
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, propose_patch
 from soul.services.state_core.review.actions import (
     accept_review_candidate,
     edit_review_candidate,
+    expire_review_candidate,
+    extend_review_candidate,
     reject_review_candidate,
     snooze_review_candidate,
 )
@@ -51,8 +54,9 @@ DEFAULT_PORT = 8765
 
 
 class SoulApi:
-    def __init__(self, project_dir: Path) -> None:
-        self.project_dir = project_dir
+    def __init__(self, project_dir: Path | None = None) -> None:
+        self.project_dir = resolve_project_dir(project_dir)
+        register_project(self.project_dir)
 
     def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = HOST_HTTP_API) -> dict[str, Any]:
         state = load_state(self.project_dir, project_name=self.project_dir.name)
@@ -296,6 +300,12 @@ class SoulApi:
     def snooze_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
         return snooze_review_candidate(self.project_dir, candidate_id, hours=hours)
 
+    def expire_review_candidate(self, candidate_id: str, *, reason: str = "") -> dict[str, Any]:
+        return expire_review_candidate(self.project_dir, candidate_id, reason=reason)
+
+    def extend_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
+        return extend_review_candidate(self.project_dir, candidate_id, hours=hours)
+
 def build_agent_injection(context: str) -> str:
     return (
         "[Soul Current State]\n"
@@ -441,6 +451,22 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/review/snooze":
                     self.write_json(
                         api.snooze_review_candidate(
+                            str(payload["candidate_id"]),
+                            hours=int_value(payload.get("hours"), default=24),
+                        )
+                    )
+                    return
+                if self.path == "/review/expire":
+                    self.write_json(
+                        api.expire_review_candidate(
+                            str(payload["candidate_id"]),
+                            reason=str(payload.get("reason") or ""),
+                        )
+                    )
+                    return
+                if self.path == "/review/extend":
+                    self.write_json(
+                        api.extend_review_candidate(
                             str(payload["candidate_id"]),
                             hours=int_value(payload.get("hours"), default=24),
                         )

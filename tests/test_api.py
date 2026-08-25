@@ -13,7 +13,7 @@ from soul.adapters.reme import ReMeJobResult
 from soul.services.state_core.proposals import propose_patch
 from soul.services.state_core.state_store import append_patch_proposal, load_patch_proposals
 from soul.services.state import load_state
-from soul.services.state_core.working_state import upsert_working_state_from_evidence
+from soul.services.state_core.working_state import load_working_state, upsert_working_state_from_evidence
 
 
 def datetime_suffix() -> str:
@@ -149,6 +149,7 @@ def test_soul_api_review_edit_snooze_and_reject_working_state(tmp_path):
                 "reason": "旧判断。",
                 "scope": "dependency setup",
                 "review_after": "2000-01-01T00:00:00Z",
+                "expires": "2099-01-01T00:00:00Z",
                 "review_card": True,
             },
         },
@@ -162,12 +163,47 @@ def test_soul_api_review_edit_snooze_and_reject_working_state(tmp_path):
     )
     assert edited["edited"]["statement"] == "后续默认使用 pnpm。"
     assert api.review_card()["counts"]["ready_to_confirm"] == 1
+    expires_at = edited["edited"]["expires_at"]
 
-    api.snooze_review_candidate(candidate_id, hours=24)
+    snoozed = api.snooze_review_candidate(candidate_id, hours=24)
     assert api.review_card()["has_reviewable_content"] is False
+    assert snoozed["snoozed"]["expires_at"] == expires_at
+    assert snoozed["snoozed"]["review_after"] != "2000-01-01T00:00:00Z"
 
     rejected = api.reject_review_candidate(candidate_id, reason="not durable", rejected_by="test")
     assert rejected["rejected"]["status"] == "rejected"
+
+
+def test_soul_api_review_expire_and_extend_working_state(tmp_path):
+    load_state(tmp_path, project_name="Demo")
+    result = upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "lifecycle",
+            "summary": "后续默认保留短期上下文。",
+            "evidence_refs": [{"type": "reme_file", "path": "daily/2026-08-22/lifecycle.md"}],
+            "working_state": {
+                "route": "working_state",
+                "statement": "后续默认保留短期上下文。",
+                "reason": "用户需要跨 turn 保留。",
+                "scope": "lifecycle",
+                "review_after": "2000-01-01T00:00:00Z",
+                "expires": "2000-01-01T00:00:00Z",
+            },
+        },
+    )
+    api = SoulApi(tmp_path)
+    candidate_id = f"working:{result['item']['id']}"
+
+    extended = api.extend_review_candidate(candidate_id, hours=24)
+
+    assert extended["extended"]["expires_at"] != "2000-01-01T00:00:00Z"
+    assert extended["extended"]["review_after"] == "2000-01-01T00:00:00Z"
+
+    expired = api.expire_review_candidate(candidate_id, reason="stale")
+    assert expired["expired"]["status"] == "expired"
+    assert load_working_state(tmp_path)["items"][0]["status"] == "expired"
 
 
 def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatch):

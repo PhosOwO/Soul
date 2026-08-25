@@ -14,7 +14,12 @@ from soul.services.shared.constants import (
 from soul.services.shared.state_types import PatchProposal, StateDoc
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal
 from soul.services.state_core.state_store import find_patch_proposal, load_state, save_state
-from soul.services.state_core.working_state import edit_working_item, promote_working_item, reject_working_item
+from soul.services.state_core.working_state import (
+    edit_working_item,
+    expire_working_item,
+    promote_working_item,
+    reject_working_item,
+)
 
 
 def accept_review_candidate(
@@ -112,10 +117,36 @@ def snooze_review_candidate(project_dir: Path, candidate_id: str, *, hours: int 
         project_dir,
         source_id,
         review_after=until.isoformat(),
-        expires_at=until.isoformat(),
         updated_by=HOST_SOUL_HTTP_API,
     )
     return {"candidate_id": candidate_id, "snoozed": edited}
+
+
+def expire_review_candidate(
+    project_dir: Path,
+    candidate_id: str,
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
+    source_type, source_id = parse_candidate_id(candidate_id)
+    if source_type != "working":
+        raise ValueError("Only Working State review candidates can be expired.")
+    expired = expire_working_item(project_dir, source_id, reason=reason)
+    return {"candidate_id": candidate_id, "expired": expired}
+
+
+def extend_review_candidate(project_dir: Path, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
+    source_type, source_id = parse_candidate_id(candidate_id)
+    if source_type != "working":
+        raise ValueError("Only Working State review candidates can be extended.")
+    until = datetime.now().astimezone() + timedelta(hours=hours)
+    edited = edit_working_item(
+        project_dir,
+        source_id,
+        expires_at=until.isoformat(),
+        updated_by=HOST_SOUL_HTTP_API,
+    )
+    return {"candidate_id": candidate_id, "extended": edited}
 
 
 def apply_confirmed_proposal(project_dir: Path, proposal: PatchProposal, *, confirmed_by: str) -> StateDoc:

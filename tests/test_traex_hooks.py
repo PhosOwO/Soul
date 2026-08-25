@@ -145,7 +145,9 @@ def test_traex_user_install_uses_trae_home_without_hardcoded_home(tmp_path: Path
     assert "bin/soul.js hook stop --host traex" in text
     assert ".trae/hooks/soul_user_prompt_submit.py" not in text
     assert ".trae/hooks/soul_stop.py" not in text
-    assert str(project) in text
+    assert str(project) not in text
+    assert "Dynamic project mode" in text
+    assert "--project-dir" not in text
     assert (project / ".soul" / "state" / "state.json").is_file()
     assert (project / ".soul" / "state" / "STATE.md").is_file()
     assert not (project / ".soul" / "state" / "soul.db").exists()

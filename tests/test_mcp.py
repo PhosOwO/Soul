@@ -113,6 +113,46 @@ def test_mcp_observe_evidence_enqueues_reme_processing(
     assert '"operation": "enqueue_evidence"' in runs
 
 
+def test_mcp_observe_evidence_routes_by_argument_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server_root = tmp_path / "server-root"
+    project = tmp_path / "project"
+    nested = project / "packages" / "app"
+    server_root.mkdir()
+    nested.mkdir(parents=True)
+    load_state(project, project_name="Project")
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "home" / ".soul"))
+
+    response = require_response(
+        SoulMcpServer(server_root).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 9,
+                "method": "tools/call",
+                "params": {
+                    "name": "observe_evidence",
+                    "arguments": {
+                        "cwd": str(nested),
+                        "task": "Capture this turn",
+                        "summary": "A project-routed observation should be queued.",
+                        "source": "test-mcp",
+                        "session_id": "session-1",
+                        "turn_id": "turn-1",
+                    },
+                },
+            }
+        )
+    )
+
+    payload = response["result"]["structuredContent"]
+    assert payload["queued"] is True
+    assert (project / ".soul" / "state" / "queue" / "jobs.jsonl").is_file()
+    assert not (server_root / ".soul" / "state" / "queue" / "jobs.jsonl").exists()
+
+
 def test_mcp_reme_evidence_and_memory_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     load_state(tmp_path, project_name="Demo")
 

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from soul.services.shared.constants import (
     PATCH_STATUS_NEEDS_REVIEW,
@@ -26,10 +27,40 @@ from soul.services.state_core.knowledge import (
 from soul.services.state_core.proposals import propose_patch
 from soul.services.state_core.state_projection import state_item_matches_task
 from soul.services.state_core.state_store import append_patch_proposal, brain_dir, load_state, utc_now
+from soul.services.state_core.working_state_policy import (
+    DEFAULT_WORKING_EXPIRY,
+    DEFAULT_WORKING_REASON,
+    DEFAULT_WORKING_REVIEW_AFTER,
+    DEFAULT_WORKING_SCOPE,
+    CONFLICT_NEGATION_SIGNALS,
+    EPISODIC_PREFIXES,
+    WORKING_CHANGE_SIGNALS,
+    WORKING_REASON_MAX_LENGTH,
+    WORKING_SCOPE_MAX_LENGTH,
+    WORKING_STATEMENT_MAX_LENGTH,
+    WORKING_TOKEN_MIN_LENGTH,
+)
 
 
 DEFAULT_WORKING_EVENTS_NAME = "working_events.jsonl"
 DEFAULT_WORKING_STATE_NAME = "working_state.json"
+
+WorkingReviewBucket = Literal["none", "ready_to_confirm", "needs_review"]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkingStateLifecycle:
+    status: str
+    active_for_context: bool
+    expired: bool
+    review_candidate: bool
+    review_due: bool
+    near_expiry: bool
+    review_card: bool
+    review_bucket: WorkingReviewBucket
+    recommended_action: str
+    reason: str
+    score: int
 
 
 def working_events_path(project_dir: Path | None = None) -> Path:
@@ -82,11 +113,11 @@ def route_working_state_from_evidence(
             "route": route if route in {"no_state", "working_state"} else "no_state",
             "review_candidate": bool(explicit.get("review_candidate", True)),
             "review_card": bool(explicit.get("review_card", False)),
-            "statement": compact_text(str(explicit.get("statement") or ""), 320),
-            "reason": compact_text(str(explicit.get("reason") or ""), 240),
-            "scope": compact_text(str(explicit.get("scope") or evidence.get("task") or ""), 120),
-            "expires": str(explicit.get("expires") or "end_of_day"),
-            "review_after": str(explicit.get("review_after") or "end_of_day"),
+            "statement": compact_text(str(explicit.get("statement") or ""), WORKING_STATEMENT_MAX_LENGTH),
+            "reason": compact_text(str(explicit.get("reason") or ""), WORKING_REASON_MAX_LENGTH),
+            "scope": compact_text(str(explicit.get("scope") or evidence.get("task") or ""), WORKING_SCOPE_MAX_LENGTH),
+            "expires": str(explicit.get("expires") or DEFAULT_WORKING_EXPIRY),
+            "review_after": str(explicit.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER),
         }
     else:
         routed = infer_working_route(evidence)
@@ -99,9 +130,9 @@ def route_working_state_from_evidence(
     if not refs:
         return {"route": "no_state", "reason": "Working State requires evidence refs."}
 
-    statement = compact_text(str(routed.get("statement") or ""), 320)
-    scope = compact_text(str(routed.get("scope") or ""), 120)
-    reason = compact_text(str(routed.get("reason") or ""), 240)
+    statement = compact_text(str(routed.get("statement") or ""), WORKING_STATEMENT_MAX_LENGTH)
+    scope = compact_text(str(routed.get("scope") or ""), WORKING_SCOPE_MAX_LENGTH)
+    reason = compact_text(str(routed.get("reason") or ""), WORKING_REASON_MAX_LENGTH)
     if not statement or not scope or not reason:
         return {"route": "no_state", "reason": "Working State requires statement, reason, and scope."}
 
@@ -118,8 +149,8 @@ def route_working_state_from_evidence(
         "statement": statement,
         "reason": reason,
         "scope": scope,
-        "expires_at": resolve_expiry(str(routed.get("expires") or "end_of_day")),
-        "review_after": resolve_review_after(str(routed.get("review_after") or "end_of_day")),
+        "expires_at": resolve_expiry(str(routed.get("expires") or DEFAULT_WORKING_EXPIRY)),
+        "review_after": resolve_review_after(str(routed.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER)),
         "evidence_refs": refs,
         "status": WORKING_STATUS_CONFLICT_NEEDS_REVIEW if conflicts else WORKING_STATUS_WORKING,
         "conflicts_with": conflicts,
@@ -141,10 +172,10 @@ def infer_working_route(evidence: dict[str, Any]) -> dict[str, Any]:
         "route": "working_state",
         "review_candidate": True,
         "statement": statement,
-        "reason": "Not retaining this working assumption may cause the next turn to repeat or follow an outdated direction.",
-        "scope": compact_text(str(evidence.get("task") or evidence.get("source") or "current task"), 120),
-        "expires": "end_of_day",
-        "review_after": "end_of_day",
+        "reason": DEFAULT_WORKING_REASON,
+        "scope": compact_text(str(evidence.get("task") or evidence.get("source") or DEFAULT_WORKING_SCOPE), WORKING_SCOPE_MAX_LENGTH),
+        "expires": DEFAULT_WORKING_EXPIRY,
+        "review_after": DEFAULT_WORKING_REVIEW_AFTER,
     }
 
 
@@ -166,52 +197,12 @@ def evidence_text(evidence: dict[str, Any]) -> str:
 
 def looks_episodic(text: str) -> bool:
     lowered = text.lower().strip()
-    episodic_prefixes = (
-        "created ",
-        "configured ",
-        "updated ",
-        "added ",
-        "ran ",
-        "tested ",
-        "verified ",
-        "fixed ",
-        "read ",
-        "reviewed ",
-        "今天阅读",
-        "阅读了",
-        "查看了",
-        "运行了",
-    )
-    return lowered.startswith(episodic_prefixes) and not contains_working_change_signal(text)
+    return lowered.startswith(EPISODIC_PREFIXES) and not contains_working_change_signal(text)
 
 
 def contains_working_change_signal(text: str) -> bool:
     lowered = text.lower()
-    signals = (
-        "当前",
-        "主线",
-        "转向",
-        "不再",
-        "不能等同",
-        "已诊断",
-        "诊断出",
-        "瓶颈",
-        "优先",
-        "暂定",
-        "先验证",
-        "先评估",
-        "先考虑",
-        "后续",
-        "下一步",
-        "should",
-        "must",
-        "default",
-        "do not",
-        "don't",
-        "avoid",
-        "qnet",
-    )
-    return any(signal in lowered for signal in signals)
+    return any(signal in lowered for signal in WORKING_CHANGE_SIGNALS)
 
 
 def extract_working_statement(text: str) -> str:
@@ -224,12 +215,12 @@ def extract_working_statement(text: str) -> str:
     selected = [sentence for sentence in sentences if contains_working_change_signal(sentence)]
     if not selected and contains_working_change_signal(normalized):
         selected = [normalized]
-    return compact_text(" ".join(selected[:2]), 320)
+    return compact_text(" ".join(selected[:2]), WORKING_STATEMENT_MAX_LENGTH)
 
 
 def resolve_expiry(raw: str) -> str:
     now = datetime.now(UTC).replace(microsecond=0)
-    if raw == "end_of_day":
+    if raw == DEFAULT_WORKING_EXPIRY:
         local_now = datetime.now().astimezone().replace(microsecond=0)
         end = local_now.replace(hour=22, minute=0, second=0)
         if local_now >= end:
@@ -244,7 +235,7 @@ def resolve_expiry(raw: str) -> str:
 
 def resolve_review_after(raw: str) -> str:
     now = datetime.now(UTC).replace(microsecond=0)
-    if raw == "end_of_day":
+    if raw == DEFAULT_WORKING_REVIEW_AFTER:
         local_now = datetime.now().astimezone().replace(microsecond=0)
         review_at = local_now.replace(hour=22, minute=0, second=0)
         if local_now >= review_at:
@@ -273,7 +264,7 @@ def accepted_state_conflicts(state: StateDoc, statement: str) -> list[str]:
         existing = str(item.get("statement") or "").lower()
         if not existing:
             continue
-        if ("不再" in statement or "do not" in lowered or "don't" in lowered) and any(
+        if (any(signal in lowered for signal in CONFLICT_NEGATION_SIGNALS)) and any(
             token and token in existing for token in meaningful_tokens(statement)
         ):
             conflicts.append(str(item.get("id") or "accepted-state-item"))
@@ -281,7 +272,11 @@ def accepted_state_conflicts(state: StateDoc, statement: str) -> list[str]:
 
 
 def meaningful_tokens(text: str) -> list[str]:
-    return [token for token in re.split(r"[^A-Za-z0-9_\u4e00-\u9fff]+", text.lower()) if len(token) >= 4]
+    return [
+        token
+        for token in re.split(r"[^A-Za-z0-9_\u4e00-\u9fff]+", text.lower())
+        if len(token) >= WORKING_TOKEN_MIN_LENGTH
+    ]
 
 
 def normalize_for_compare(text: str) -> str:
@@ -333,8 +328,8 @@ def working_item_from_route(route: dict[str, Any], evidence: dict[str, Any]) -> 
         "task": str(evidence.get("task") or ""),
         "created_at": now,
         "updated_at": now,
-        "expires_at": str(route.get("expires_at") or resolve_expiry("end_of_day")),
-        "review_after": str(route.get("review_after") or resolve_review_after("end_of_day")),
+        "expires_at": str(route.get("expires_at") or resolve_expiry(DEFAULT_WORKING_EXPIRY)),
+        "review_after": str(route.get("review_after") or resolve_review_after(DEFAULT_WORKING_REVIEW_AFTER)),
         "supersedes": [],
         "conflicts_with": cast(list[str], route.get("conflicts_with") or []),
     }
@@ -377,17 +372,74 @@ def merge_refs(*ref_lists: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return merged
 
 
+def classify_working_item_lifecycle(
+    item: WorkingStateItem,
+    *,
+    now: datetime | None = None,
+    near_expiry_hours: int = 4,
+) -> WorkingStateLifecycle:
+    current_time = now or datetime.now(UTC)
+    status = str(item.get("status") or "")
+    expired = is_working_item_expired(item, now=current_time)
+    review_candidate = bool(item.get("review_candidate", False))
+    review_due = is_working_item_review_due(item, now=current_time)
+    near_expiry = is_working_item_near_expiry(item, hours=near_expiry_hours, now=current_time)
+    review_card = bool(item.get("review_card", False))
+    active_for_context = status == WORKING_STATUS_WORKING and not expired
+
+    review_bucket: WorkingReviewBucket = "none"
+    recommended_action = ""
+    reason = ""
+    score = 0
+    if review_candidate and status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
+        review_bucket = "needs_review"
+        recommended_action = "review"
+        reason = "Working State conflicts with accepted state and should not silently affect future turns."
+        score = 100
+    elif review_candidate and near_expiry and not review_due:
+        review_bucket = "needs_review"
+        recommended_action = "review"
+        reason = "Working State is close to expiry; decide whether to keep, accept, or reject it."
+        score = 70
+    elif review_candidate and review_card and review_due:
+        review_bucket = "ready_to_confirm"
+        recommended_action = "accept"
+        reason = "Working State was explicitly marked as worth confirming in the low-noise review card."
+        score = 75
+    elif review_candidate and review_due:
+        review_bucket = "needs_review"
+        recommended_action = "review"
+        reason = "Working State is due for review; decide whether to accept, reject, or snooze it."
+        score = 65
+
+    return WorkingStateLifecycle(
+        status=status,
+        active_for_context=active_for_context,
+        expired=expired,
+        review_candidate=review_candidate,
+        review_due=review_due,
+        near_expiry=near_expiry,
+        review_card=review_card,
+        review_bucket=review_bucket,
+        recommended_action=recommended_action,
+        reason=reason,
+        score=score,
+    )
+
+
 def is_working_item_active(item: WorkingStateItem, *, now: datetime | None = None) -> bool:
-    if item.get("status") != WORKING_STATUS_WORKING:
-        return False
+    return classify_working_item_lifecycle(item, now=now).active_for_context
+
+
+def is_working_item_expired(item: WorkingStateItem, *, now: datetime | None = None) -> bool:
     raw_expiry = item.get("expires_at")
     if not raw_expiry:
-        return True
+        return False
     try:
         expiry = datetime.fromisoformat(str(raw_expiry).replace("Z", "+00:00"))
     except ValueError:
-        return True
-    return expiry > (now or datetime.now(UTC))
+        return False
+    return expiry <= (now or datetime.now(UTC))
 
 
 def is_working_item_review_due(item: WorkingStateItem, *, now: datetime | None = None) -> bool:
@@ -401,6 +453,18 @@ def is_working_item_review_due(item: WorkingStateItem, *, now: datetime | None =
     return review_after <= (now or datetime.now(UTC))
 
 
+def is_working_item_near_expiry(item: WorkingStateItem, *, hours: int, now: datetime | None = None) -> bool:
+    raw_expiry = item.get("expires_at")
+    if not raw_expiry:
+        return False
+    try:
+        expiry = datetime.fromisoformat(str(raw_expiry).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    current_time = now or datetime.now(UTC)
+    return current_time < expiry <= current_time + timedelta(hours=hours)
+
+
 def project_working_state_items(
     project_dir: Path | None = None,
     *,
@@ -409,7 +473,11 @@ def project_working_state_items(
     now: datetime | None = None,
 ) -> list[WorkingStateItem]:
     doc = load_working_state(project_dir)
-    active = [item for item in doc.get("items", []) if is_working_item_active(item, now=now)]
+    active = [
+        item
+        for item in doc.get("items", [])
+        if classify_working_item_lifecycle(item, now=now).active_for_context
+    ]
     if task:
         relevant = [
             item for item in active
@@ -430,7 +498,8 @@ def format_working_state_context(project_dir: Path | None = None, *, task: str =
     due_items: list[WorkingStateItem] = []
     for item in items:
         expiry = f", expires={item.get('expires_at')}" if item.get("expires_at") else ""
-        review = ", review-due" if is_working_item_review_due(item) else ""
+        lifecycle = classify_working_item_lifecycle(item)
+        review = ", review-due" if lifecycle.review_due else ""
         if review:
             due_items.append(item)
         lines.append(f"- [working{review}{expiry}] {item.get('statement', '')}")
@@ -521,11 +590,11 @@ def edit_working_item(
         raise ValueError(f"Working State item not found: {working_id}")
     before = dict(item)
     if statement is not None:
-        item["statement"] = compact_text(statement, 320)
+        item["statement"] = compact_text(statement, WORKING_STATEMENT_MAX_LENGTH)
     if reason is not None:
-        item["reason"] = compact_text(reason, 240)
+        item["reason"] = compact_text(reason, WORKING_REASON_MAX_LENGTH)
     if scope is not None:
-        item["scope"] = compact_text(scope, 120)
+        item["scope"] = compact_text(scope, WORKING_SCOPE_MAX_LENGTH)
     if review_after is not None:
         item["review_after"] = resolve_review_after(review_after)
     if expires_at is not None:

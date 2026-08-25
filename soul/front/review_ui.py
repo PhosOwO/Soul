@@ -396,6 +396,8 @@ def render_review_page() -> str:
       }
       if (candidate.source_type === "working_state") {
         actions.append(actionButton("Snooze", "ghost", () => snooze(candidate)));
+        actions.append(actionButton("Extend", "ghost", () => extend(candidate)));
+        actions.append(actionButton("Expire", "danger", () => expire(candidate)));
       }
       node.append(actions);
 
@@ -432,6 +434,18 @@ def render_review_page() -> str:
 
     async function snooze(candidate) {
       await postAction("/review/snooze", { candidate_id: candidate.id, hours: 24 });
+      await loadCard();
+    }
+
+    async function extend(candidate) {
+      await postAction("/review/extend", { candidate_id: candidate.id, hours: 24 });
+      await loadCard();
+    }
+
+    async function expire(candidate) {
+      const reason = window.prompt("Reason for expiry", "");
+      if (reason === null) return;
+      await postAction("/review/expire", { candidate_id: candidate.id, reason });
       await loadCard();
     }
 

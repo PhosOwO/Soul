@@ -17,7 +17,7 @@ from soul.services.shared.constants import (
 from soul.services.shared.state_types import PatchProposal, WorkingStateItem
 from soul.services.shared.text import compact_text
 from soul.services.state_core.state_store import load_patch_proposals, load_state, utc_now
-from soul.services.state_core.working_state import load_working_state
+from soul.services.state_core.working_state import WorkingStateLifecycle, classify_working_item_lifecycle, load_working_state
 
 
 CandidateBucket = Literal["ready_to_confirm", "needs_review"]
@@ -170,65 +170,46 @@ def working_state_candidates(
     doc = load_working_state(project_dir, project_name=project_dir.name)
     candidates: list[dict[str, Any]] = []
     for item in doc.get("items", []):
-        status = str(item.get("status") or "")
-        if status not in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
+        lifecycle = classify_working_item_lifecycle(item, near_expiry_hours=near_expiry_hours, now=now)
+        if lifecycle.status not in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
             continue
-        if not bool(item.get("review_candidate", False)):
+        if not lifecycle.review_candidate:
             continue
-        due = is_due(str(item.get("review_after") or ""), now=now)
-        near_expiry = is_near_expiry(str(item.get("expires_at") or ""), hours=near_expiry_hours, now=now)
-        review_card = bool(item.get("review_card", False))
-        if status != WORKING_STATUS_CONFLICT_NEEDS_REVIEW and not due and not near_expiry:
+        if lifecycle.review_bucket == "none":
             continue
-        if status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
-            bucket: CandidateBucket = "needs_review"
-            recommended_action = "review"
-            reason = "Working State conflicts with accepted state and should not silently affect future turns."
-            score = 100
-        elif near_expiry and not due:
-            bucket = "needs_review"
-            recommended_action = "review"
-            reason = "Working State is close to expiry; decide whether to keep, accept, or reject it."
-            score = 70
-        elif review_card:
-            bucket = "ready_to_confirm"
-            recommended_action = "accept"
-            reason = "Working State was explicitly marked as worth confirming in the low-noise review card."
-            score = 75
-        elif due:
-            bucket = "needs_review"
-            recommended_action = "review"
-            reason = "Working State is due for review; decide whether to accept, reject, or snooze it."
-            score = 65
-        else:
-            continue
-        candidates.append(working_candidate(item, bucket, recommended_action, reason, score))
+        candidates.append(working_candidate(item, lifecycle))
     return candidates
 
 
 def working_candidate(
     item: WorkingStateItem,
-    bucket: CandidateBucket,
-    recommended_action: str,
-    reason: str,
-    score: int,
+    lifecycle: WorkingStateLifecycle,
 ) -> dict[str, Any]:
     return {
         "id": f"working:{item.get('id', '')}",
-        "bucket": bucket,
+        "bucket": lifecycle.review_bucket,
         "source_type": "working_state",
         "source_id": item.get("id", ""),
         "title": compact_text(str(item.get("scope") or "Working State"), 80),
         "statement": compact_text(str(item.get("statement") or ""), 240),
-        "review_reason": reason,
-        "recommended_action": recommended_action,
-        "recommendation": "confirm" if bucket == "ready_to_confirm" else "needs_review",
-        "decision_cost": "low" if bucket == "ready_to_confirm" else "medium",
-        "score": score,
+        "review_reason": lifecycle.reason,
+        "recommended_action": lifecycle.recommended_action,
+        "recommendation": "confirm" if lifecycle.review_bucket == "ready_to_confirm" else "needs_review",
+        "decision_cost": "low" if lifecycle.review_bucket == "ready_to_confirm" else "medium",
+        "score": lifecycle.score,
         "created_at": item.get("created_at", ""),
         "updated_at": item.get("updated_at", ""),
         "expires_at": item.get("expires_at", ""),
         "review_after": item.get("review_after", ""),
+        "lifecycle": {
+            "status": lifecycle.status,
+            "active_for_context": lifecycle.active_for_context,
+            "expired": lifecycle.expired,
+            "review_due": lifecycle.review_due,
+            "near_expiry": lifecycle.near_expiry,
+            "review_candidate": lifecycle.review_candidate,
+            "review_card": lifecycle.review_card,
+        },
         "conflicts_with": item.get("conflicts_with", []),
         "evidence": {
             "summary": compact_text(str(item.get("reason") or ""), 200),

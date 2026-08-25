@@ -123,7 +123,9 @@ def test_codex_user_install_uses_codex_home_without_hardcoded_home(tmp_path: Pat
     text = config.read_text(encoding="utf-8")
     assert "[mcp_servers.soul]" in text
     assert "soul-mcp.js" in text
-    assert str(project) in text
+    assert str(project) not in text
+    assert "Dynamic project mode" in text
+    assert "--project-dir" not in text
     assert (project / ".soul" / "state" / "state.json").is_file()
     assert (project / ".soul" / "state" / "STATE.md").is_file()
     assert not (project / ".soul" / "state" / "soul.db").exists()

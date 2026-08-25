@@ -16,6 +16,7 @@ from typing import Any, Mapping, NoReturn, cast
 
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
+from soul.services.daemon import daemon_loop, load_daemon_status, scan_registered_projects
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
@@ -539,6 +540,26 @@ def dsh_doctor_command(args: argparse.Namespace) -> None:
         print("- status: API availability is not enough; no DeepSeek Harness Soul execution heartbeat was found.")
 
 
+def daemon_scan_command(args: argparse.Namespace) -> None:
+    status = scan_registered_projects(limit=args.limit, near_expiry_hours=args.near_expiry_hours)
+    if args.json:
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_status(status))
+
+
+def daemon_status_command(args: argparse.Namespace) -> None:
+    status = load_daemon_status()
+    if args.json:
+        print(json.dumps(status, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_status(status))
+
+
+def daemon_run_command(args: argparse.Namespace) -> None:
+    daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
+
+
 def dsh_install_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
     output = Path(args.output).expanduser()
@@ -823,10 +844,11 @@ def build_codex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
         [
             MANAGED_CODEX_BEGIN,
             "# Managed by `soul codex install --scope user`; edit with care.",
+            "# Dynamic project mode; Soul resolves the active project from the host cwd.",
             "",
             "[mcp_servers.soul]",
             'command = "node"',
-            f"args = {json.dumps([command_path(soul_mcp), '--project-dir', str(project_dir)])}",
+            f"args = {json.dumps([command_path(soul_mcp)])}",
             "enabled = true",
             "startup_timeout_sec = 30",
             "tool_timeout_sec = 60",
@@ -844,10 +866,11 @@ def build_traex_user_managed_block(*, project_dir: Path, package_root: Path) -> 
         [
             MANAGED_TRAEX_BEGIN,
             "# Managed by `soul traex install --scope user`; edit with care.",
+            "# Dynamic project mode; Soul resolves the active project from the host cwd.",
             "",
             "[mcp_servers.soul]",
             'command = "node"',
-            f"args = {json.dumps([str(soul_mcp), '--project-dir', str(project_dir)])}",
+            f"args = {json.dumps([str(soul_mcp)])}",
             "enabled = true",
             "startup_timeout_sec = 30.0",
             "tool_timeout_sec = 60.0",
@@ -1124,6 +1147,39 @@ def format_review_card_section(title: str, raw_candidates: Any, *, show_refs: bo
                 lines.append("  evidence refs: none")
     lines.append("")
     return lines
+
+
+def format_daemon_status(status: Mapping[str, Any]) -> str:
+    projects = status.get("projects")
+    project_rows = projects if isinstance(projects, list) else []
+    lines = [
+        "Soul Daemon",
+        f"- generated_at: {status.get('generated_at', 'never')}",
+        f"- projects: {status.get('project_count', len(project_rows))}",
+    ]
+    if not project_rows:
+        lines.append("- review: none")
+        return "\n".join(lines)
+    for item in project_rows:
+        if not isinstance(item, Mapping):
+            continue
+        if not item.get("available", False):
+            lines.append(f"- {item.get('project_name', 'unknown')}: unavailable ({item.get('error', 'unknown error')})")
+            continue
+        review = item.get("review") if isinstance(item.get("review"), Mapping) else {}
+        lifecycle = item.get("lifecycle") if isinstance(item.get("lifecycle"), Mapping) else {}
+        queue = item.get("queue") if isinstance(item.get("queue"), Mapping) else {}
+        lines.append(
+            f"- {item.get('project_name', 'unknown')}: "
+            f"review={review.get('total', 0)} "
+            f"(ready={review.get('ready_to_confirm', 0)}, needs={review.get('needs_review', 0)}), "
+            f"working={lifecycle.get('active_working', 0)} active/"
+            f"{lifecycle.get('review_due', 0)} due/"
+            f"{lifecycle.get('expired_unresolved', 0)} expired, "
+            f"queue={queue.get('backlog', queue.get('queued', 0) + queue.get('failed_retryable', 0))} backlog"
+        )
+        lines.append(f"  path: {item.get('project_dir', '')}")
+    return "\n".join(lines)
 
 
 def newest_files(root: Path, *, limit: int, names: set[str] | None = None) -> list[Path]:
@@ -1453,6 +1509,21 @@ def build_parser() -> argparse.ArgumentParser:
     dsh_doctor.add_argument("--project-dir", default=".")
     dsh_doctor.add_argument("--api-url", default="http://127.0.0.1:8765")
     dsh_doctor.set_defaults(func=dsh_doctor_command)
+
+    daemon_parser = subparsers.add_parser("daemon", help="Run or inspect the global Soul daemon.")
+    daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
+    daemon_scan = daemon_subparsers.add_parser("scan", help="Scan registered projects for review and queue work.")
+    daemon_scan.add_argument("--limit", type=int, default=5)
+    daemon_scan.add_argument("--near-expiry-hours", type=int, default=4)
+    daemon_scan.add_argument("--json", action="store_true")
+    daemon_scan.set_defaults(func=daemon_scan_command)
+    daemon_status = daemon_subparsers.add_parser("status", help="Show the latest daemon scan result.")
+    daemon_status.add_argument("--json", action="store_true")
+    daemon_status.set_defaults(func=daemon_status_command)
+    daemon_run = daemon_subparsers.add_parser("run", help="Run the daemon scan loop in the foreground.")
+    daemon_run.add_argument("--interval-seconds", type=float, default=300.0)
+    daemon_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
+    daemon_run.set_defaults(func=daemon_run_command)
 
     traex_parser = subparsers.add_parser("traex", help="TraeX project integration helpers.")
     traex_subparsers = traex_parser.add_subparsers(dest="traex_command", required=True)

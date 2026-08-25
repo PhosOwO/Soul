@@ -148,6 +148,35 @@ def test_review_card_shows_due_working_state_as_needs_review(tmp_path):
     assert card["needs_review"][0]["recommended_action"] == "review"
 
 
+def test_review_card_shows_expired_due_working_state_without_context_activity(tmp_path):
+    result = upsert_working_state_from_evidence(
+        tmp_path,
+        {
+            "source": "test",
+            "task": "Review Card UI",
+            "summary": "后续回答默认把 Review Card 当成低打扰确认队列。",
+            "evidence_refs": evidence_refs(),
+            "working_state": {
+                "route": "working_state",
+                "statement": "后续回答默认把 Review Card 当成低打扰确认队列。",
+                "reason": "产品定义复述，需要确认是否留存。",
+                "scope": "Soul Review Card UX",
+                "review_after": (datetime.now(UTC) - timedelta(minutes=2)).isoformat().replace("+00:00", "Z"),
+                "expires": (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+            },
+        },
+    )
+
+    card = build_review_card(tmp_path)
+
+    assert card["counts"]["needs_review"] == 1
+    candidate = card["needs_review"][0]
+    assert candidate["source_id"] == result["item"]["id"]
+    assert candidate["lifecycle"]["expired"] is True
+    assert candidate["lifecycle"]["active_for_context"] is False
+    assert candidate["lifecycle"]["review_due"] is True
+
+
 def test_review_card_filters_non_review_candidate_working_state(tmp_path):
     upsert_working_state_from_evidence(
         tmp_path,

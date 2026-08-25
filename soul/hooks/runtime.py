@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from soul.services.project_resolver import register_project, resolve_project_dir
 from soul.services.integrations.sessions import resolve_session_id
 
 
@@ -188,7 +189,12 @@ def write_json(payload: dict[str, Any]) -> None:
 
 
 def project_dir_from_payload(payload: dict[str, Any]) -> Path:
-    return Path(payload.get("cwd") or payload.get("project_dir") or Path.cwd()).resolve()
+    project_dir = resolve_project_dir(
+        str(payload["project_dir"]) if payload.get("project_dir") else None,
+        cwd=str(payload["cwd"]) if payload.get("cwd") else None,
+    )
+    register_project(project_dir)
+    return project_dir
 
 
 def extract_prompt(payload: dict[str, Any]) -> str:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from soul.api import SoulApi
+from soul.services.project_resolver import resolve_project_dir
 from soul.services.shared.constants import HOST_SOUL_MCP
 
 
@@ -24,6 +25,8 @@ TOOLS: list[dict[str, Any]] = [
                 "task": {"type": "string"},
                 "scope": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1},
+                    "project_dir": {"type": "string"},
+                    "cwd": {"type": "string"},
             },
         },
     },
@@ -45,6 +48,8 @@ TOOLS: list[dict[str, Any]] = [
                 "episode": {"type": "object"},
                 "session_id": {"type": "string"},
                 "turn_id": {"type": "string"},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
                 "reme": {
                     "type": "object",
                     "properties": {
@@ -65,6 +70,8 @@ TOOLS: list[dict[str, Any]] = [
                 "path": {"type": "string"},
                 "start_line": {"type": "integer", "minimum": 1},
                 "end_line": {"type": "integer", "minimum": 1},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
                 "reme": {"type": "object", "properties": {"workspace_dir": {"type": "string"}}},
             },
             "required": ["path"],
@@ -79,6 +86,8 @@ TOOLS: list[dict[str, Any]] = [
                 "path": {"type": "string"},
                 "depth": {"type": "integer", "minimum": 1},
                 "direction": {"type": "string", "enum": ["both", "in", "out"]},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
                 "reme": {"type": "object", "properties": {"workspace_dir": {"type": "string"}}},
             },
             "required": ["path"],
@@ -94,6 +103,8 @@ TOOLS: list[dict[str, Any]] = [
                 "hint": {"type": "string"},
                 "scan_days": {"type": "integer", "minimum": 1},
                 "max_units": {"type": "integer", "minimum": 1},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
                 "reme": {"type": "object", "properties": {"workspace_dir": {"type": "string"}}},
             },
         },
@@ -106,6 +117,8 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "date": {"type": "string"},
                 "include_content": {"type": "boolean"},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
                 "reme": {"type": "object", "properties": {"workspace_dir": {"type": "string"}}},
             },
         },
@@ -117,6 +130,8 @@ TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "evidence": {"type": "object"},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
             },
             "required": ["evidence"],
         },
@@ -129,6 +144,8 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "proposal_id": {"type": "string"},
                 "confirmed_by": {"type": "string"},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
             },
             "required": ["proposal_id"],
         },
@@ -137,8 +154,17 @@ TOOLS: list[dict[str, Any]] = [
 
 
 class SoulMcpServer:
-    def __init__(self, project_dir: Path) -> None:
-        self.api = SoulApi(project_dir)
+    def __init__(self, project_dir: Path | None = None) -> None:
+        self.project_dir = resolve_project_dir(project_dir)
+
+    def api_for_arguments(self, arguments: dict[str, Any]) -> SoulApi:
+        raw_project_dir = arguments.get("project_dir")
+        raw_cwd = arguments.get("cwd")
+        project_dir = resolve_project_dir(
+            str(raw_project_dir) if raw_project_dir else None,
+            cwd=str(raw_cwd) if raw_cwd else self.project_dir,
+        )
+        return SoulApi(project_dir)
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
         request_id = request.get("id")
@@ -172,7 +198,7 @@ class SoulMcpServer:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "get_projected_state":
-            payload = self.api.get_state(
+            payload = self.api_for_arguments(arguments).get_state(
                 task=str(arguments.get("task", "")),
                 scope=str(arguments.get("scope", "project")),
                 limit=int_value(arguments.get("limit"), default=10),
@@ -197,7 +223,7 @@ class SoulMcpServer:
             episode = arguments.get("episode")
             episode_payload = episode if isinstance(episode, dict) else None
             reme = arguments.get("reme")
-            payload = self.api.enqueue_evidence(
+            payload = self.api_for_arguments(arguments).enqueue_evidence(
                 evidence=evidence,
                 episode=episode_payload,
                 reme=reme if isinstance(reme, dict) else None,
@@ -207,7 +233,7 @@ class SoulMcpServer:
         if name == "read_evidence":
             reme = arguments.get("reme")
             return tool_result(
-                self.api.read_evidence(
+                self.api_for_arguments(arguments).read_evidence(
                     path=str(arguments["path"]),
                     start_line=optional_int(arguments.get("start_line")),
                     end_line=optional_int(arguments.get("end_line")),
@@ -218,7 +244,7 @@ class SoulMcpServer:
         if name == "trace_evidence":
             reme = arguments.get("reme")
             return tool_result(
-                self.api.trace_evidence(
+                self.api_for_arguments(arguments).trace_evidence(
                     path=str(arguments["path"]),
                     depth=int_value(arguments.get("depth"), default=1),
                     direction=str(arguments.get("direction") or "both"),
@@ -229,7 +255,7 @@ class SoulMcpServer:
         if name == "consolidate_memory":
             reme = arguments.get("reme")
             return tool_result(
-                self.api.consolidate_memory(
+                self.api_for_arguments(arguments).consolidate_memory(
                     date=str(arguments.get("date") or ""),
                     hint=str(arguments.get("hint") or ""),
                     scan_days=optional_int(arguments.get("scan_days")),
@@ -241,7 +267,7 @@ class SoulMcpServer:
         if name == "get_proactive_topics":
             reme = arguments.get("reme")
             return tool_result(
-                self.api.get_proactive_topics(
+                self.api_for_arguments(arguments).get_proactive_topics(
                     date=str(arguments.get("date") or ""),
                     include_content=bool(arguments.get("include_content", False)),
                     reme=reme if isinstance(reme, dict) else None,
@@ -252,12 +278,12 @@ class SoulMcpServer:
             evidence = arguments.get("evidence")
             if not isinstance(evidence, dict):
                 raise ValueError("propose_patch requires object argument: evidence")
-            return tool_result(dict(self.api.propose_patch(evidence)))
+            return tool_result(dict(self.api_for_arguments(arguments).propose_patch(evidence)))
 
         if name == "apply_patch":
             proposal_id = str(arguments["proposal_id"])
             confirmed_by = str(arguments.get("confirmed_by", HOST_SOUL_MCP))
-            return tool_result(self.api.apply_patch(proposal_id, confirmed_by=confirmed_by))
+            return tool_result(self.api_for_arguments(arguments).apply_patch(proposal_id, confirmed_by=confirmed_by))
 
         raise ValueError(f"Unknown tool: {name}")
 
