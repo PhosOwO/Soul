@@ -190,6 +190,110 @@ def test_traex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> 
     assert "Skipped existing unmanaged entries" in completed.stdout
 
 
+def test_traex_user_uninstall_removes_only_managed_block(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    config = tmp_path / "custom" / "traecli.toml"
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "traex",
+            "install",
+            "--scope",
+            "user",
+            "--project-dir",
+            str(project),
+            "--traex-config",
+            str(config),
+            "--skip-reme-check",
+        ],
+        cwd=ROOT,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    config.write_text(config.read_text(encoding="utf-8") + '\n[custom]\nvalue = "keep"\n', encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "traex",
+            "uninstall",
+            "--traex-config",
+            str(config),
+        ],
+        cwd=ROOT,
+        env=cli_env(),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    text = config.read_text(encoding="utf-8")
+    assert "Uninstalled Soul TraeX user config" in completed.stdout
+    assert "managed block: removed" in completed.stdout
+    assert "SoulKit managed TraeX integration" not in text
+    assert "[[hooks.UserPromptSubmit.hooks]]" not in text
+    assert "[[hooks.Stop.hooks]]" not in text
+    assert '[custom]\nvalue = "keep"' in text
+
+
+def test_top_level_uninstall_removes_user_configs_and_optional_global_state(tmp_path: Path) -> None:
+    codex_config = tmp_path / "codex" / "config.toml"
+    traex_config = tmp_path / "trae" / "traecli.toml"
+    soul_home = tmp_path / "soul-home"
+    soul_home.mkdir()
+    (soul_home / "projects.json").write_text("{}\n", encoding="utf-8")
+    (soul_home / "daemon_status.json").write_text("{}\n", encoding="utf-8")
+
+    codex_config.parent.mkdir()
+    codex_config.write_text(
+        "# >>> SoulKit managed Codex integration >>>\n[mcp_servers.soul]\ncommand = \"node\"\n# <<< SoulKit managed Codex integration <<<\n[custom]\nvalue = \"keep\"\n",
+        encoding="utf-8",
+    )
+    traex_config.parent.mkdir()
+    traex_config.write_text(
+        "# >>> SoulKit managed TraeX integration >>>\n[mcp_servers.soul]\ncommand = \"node\"\n# <<< SoulKit managed TraeX integration <<<\n[custom]\nvalue = \"keep\"\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "uninstall",
+            "--codex-config",
+            str(codex_config),
+            "--traex-config",
+            str(traex_config),
+            "--purge-global-state",
+        ],
+        cwd=ROOT,
+        env={**cli_env(), "SOUL_HOME": str(soul_home)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "Uninstalled Soul user integrations." in completed.stdout
+    assert "Codex managed block: removed" in completed.stdout
+    assert "TraeX managed block: removed" in completed.stdout
+    assert "global state files removed: 2" in completed.stdout
+    assert "SoulKit managed" not in codex_config.read_text(encoding="utf-8")
+    assert "SoulKit managed" not in traex_config.read_text(encoding="utf-8")
+    assert '[custom]\nvalue = "keep"' in codex_config.read_text(encoding="utf-8")
+    assert '[custom]\nvalue = "keep"' in traex_config.read_text(encoding="utf-8")
+    assert not (soul_home / "projects.json").exists()
+    assert not (soul_home / "daemon_status.json").exists()
+
+
 def test_traex_doctor_reports_missing_heartbeat(tmp_path: Path) -> None:
     project = tmp_path / "consumer"
     project.mkdir()

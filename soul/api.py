@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.services.shared.constants import (
     HOST_HTTP_API,
@@ -534,6 +535,7 @@ def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal local Soul HTTP API.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--project-dir", default=".", help="Soul project directory containing .soul/")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

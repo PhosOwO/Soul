@@ -164,6 +164,33 @@ def test_codex_user_install_preserves_existing_unmanaged_mcp(tmp_path: Path) -> 
     assert "Skipped existing unmanaged entries" in result.stdout
 
 
+def test_codex_user_uninstall_removes_only_managed_block(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    config = tmp_path / "codex-home" / "config.toml"
+
+    run_cli(
+        tmp_path,
+        "codex",
+        "install",
+        "--project-dir",
+        str(project),
+        "--codex-config",
+        str(config),
+        "--skip-reme-check",
+    )
+    config.write_text(config.read_text(encoding="utf-8") + '\n[custom]\nvalue = "keep"\n', encoding="utf-8")
+
+    result = run_cli(tmp_path, "codex", "uninstall", "--codex-config", str(config))
+
+    text = config.read_text(encoding="utf-8")
+    assert "Uninstalled Soul Codex user config" in result.stdout
+    assert "managed block: removed" in result.stdout
+    assert "SoulKit managed Codex integration" not in text
+    assert "[mcp_servers.soul]" not in text
+    assert '[custom]\nvalue = "keep"' in text
+
+
 def test_codex_doctor_reports_cli_ingest_without_mcp_heartbeat(tmp_path: Path) -> None:
     session_path = tmp_path / "session.jsonl"
     write_session(session_path, "I need to complete MHW category evaluation.")

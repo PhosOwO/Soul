@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from pathlib import Path
 from typing import Any, Mapping, NoReturn, cast
 
+from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
 from soul.services.daemon import daemon_loop, load_daemon_status, scan_registered_projects
@@ -488,6 +489,19 @@ def codex_install_command(args: argparse.Namespace) -> None:
         init_project(project_dir, project_name=args.project_name)
 
 
+def codex_uninstall_command(args: argparse.Namespace) -> None:
+    if args.scope != "user":
+        abort("Codex uninstall currently supports only `--scope user`.")
+    config_path = resolve_codex_config_path(args.codex_config)
+    removed = uninstall_managed_config(
+        config_path,
+        begin_marker=MANAGED_CODEX_BEGIN,
+        end_marker=MANAGED_CODEX_END,
+    )
+    print(f"Uninstalled Soul Codex user config from: {config_path}")
+    print(f"- managed block: {'removed' if removed else 'not found'}")
+
+
 def codex_doctor_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
     user_config = resolve_codex_config_path(args.codex_config)
@@ -560,6 +574,32 @@ def daemon_run_command(args: argparse.Namespace) -> None:
     daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
 
 
+def uninstall_command(args: argparse.Namespace) -> None:
+    if args.scope != "user":
+        abort("Soul uninstall currently supports only `--scope user`.")
+    codex_removed = uninstall_managed_config(
+        resolve_codex_config_path(args.codex_config),
+        begin_marker=MANAGED_CODEX_BEGIN,
+        end_marker=MANAGED_CODEX_END,
+    )
+    traex_removed = uninstall_managed_config(
+        resolve_traex_config_path(args.traex_config),
+        begin_marker=MANAGED_TRAEX_BEGIN,
+        end_marker=MANAGED_TRAEX_END,
+    )
+    print("Uninstalled Soul user integrations.")
+    print(f"- Codex managed block: {'removed' if codex_removed else 'not found'}")
+    print(f"- TraeX managed block: {'removed' if traex_removed else 'not found'}")
+    if args.purge_global_state:
+        removed_files = purge_global_state_files()
+        print(f"- global state files removed: {len(removed_files)}")
+        for path in removed_files:
+            print(f"  - {path}")
+    else:
+        print("- global state: kept")
+        print("- project .soul directories: kept")
+
+
 def dsh_install_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
     output = Path(args.output).expanduser()
@@ -626,6 +666,19 @@ def traex_install_command(args: argparse.Namespace) -> None:
     if not args.skip_reme_check:
         print("")
         print_reme_preflight(project_dir, create_workspace=True)
+
+
+def traex_uninstall_command(args: argparse.Namespace) -> None:
+    if args.scope != "user":
+        abort("TraeX uninstall currently supports only `--scope user`.")
+    config_path = resolve_traex_config_path(args.traex_config)
+    removed = uninstall_managed_config(
+        config_path,
+        begin_marker=MANAGED_TRAEX_BEGIN,
+        end_marker=MANAGED_TRAEX_END,
+    )
+    print(f"Uninstalled Soul TraeX user config from: {config_path}")
+    print(f"- managed block: {'removed' if removed else 'not found'}")
 
 
 def install_traex_user_config(args: argparse.Namespace, project_dir: Path) -> None:
@@ -983,6 +1036,29 @@ def remove_managed_block(text: str, *, begin_marker: str, end_marker: str) -> st
     return text[:start].rstrip() + "\n" + text[end:].lstrip()
 
 
+def uninstall_managed_config(config_path: Path, *, begin_marker: str, end_marker: str) -> bool:
+    if not config_path.exists():
+        return False
+    current = config_path.read_text(encoding="utf-8")
+    next_text = remove_managed_block(current, begin_marker=begin_marker, end_marker=end_marker)
+    if next_text == current:
+        return False
+    config_path.write_text(next_text, encoding="utf-8")
+    return True
+
+
+def purge_global_state_files() -> list[Path]:
+    removed: list[Path] = []
+    for path in [soul_home() / "projects.json", soul_home() / "daemon_status.json"]:
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed.append(path)
+        except OSError:
+            continue
+    return removed
+
+
 def extract_toml_section(text: str, heading: str) -> str:
     start = text.find(heading)
     if start == -1:
@@ -1317,6 +1393,7 @@ def top_level_command(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="soul", description="Soul Core command line interface.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--review", action="store_true", help="Start or open the local Soul Review web UI.")
     parser.add_argument("--review-project-dir", default=".", help="Project directory for --review. Defaults to cwd.")
     parser.add_argument("--review-host", default="127.0.0.1", help="Host for --review local server.")
@@ -1329,6 +1406,23 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser = subparsers.add_parser("init", help="Initialize .soul/state state files.")
     init_parser.add_argument("--project-name", help="Defaults to the current directory name.")
     init_parser.set_defaults(func=init_command)
+
+    uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall Soul user-level integrations.")
+    uninstall_parser.add_argument("--scope", choices=["user"], default="user")
+    uninstall_parser.add_argument(
+        "--codex-config",
+        help="Override Codex config path. Defaults to $CODEX_HOME/config.toml or the current user's Codex home.",
+    )
+    uninstall_parser.add_argument(
+        "--traex-config",
+        help="Override user TraeX config path. Defaults to $TRAE_HOME/traecli.toml or the current user's TraeX home.",
+    )
+    uninstall_parser.add_argument(
+        "--purge-global-state",
+        action="store_true",
+        help="Remove $SOUL_HOME/projects.json and daemon_status.json. Project .soul directories are kept.",
+    )
+    uninstall_parser.set_defaults(func=uninstall_command)
 
     status_parser = subparsers.add_parser("status", help="Print current project cognition.")
     status_parser.set_defaults(func=status_command)
@@ -1485,6 +1579,13 @@ def build_parser() -> argparse.ArgumentParser:
     codex_install.add_argument("--project-name", help="Project name to use with --init. Defaults to project directory name.")
     codex_install.add_argument("--skip-reme-check", action="store_true", help="Skip the non-blocking ReMe PATH preflight.")
     codex_install.set_defaults(func=codex_install_command)
+    codex_uninstall = codex_subparsers.add_parser("uninstall", help="Remove Soul from Codex user config.")
+    codex_uninstall.add_argument("--scope", choices=["user"], default="user")
+    codex_uninstall.add_argument(
+        "--codex-config",
+        help="Override Codex config path. Defaults to $CODEX_HOME/config.toml or the current user's Codex home.",
+    )
+    codex_uninstall.set_defaults(func=codex_uninstall_command)
     codex_ingest = codex_subparsers.add_parser("ingest", help="Import and reflect a Codex JSONL session.")
     codex_ingest.add_argument("path")
     codex_ingest.add_argument("--max-patches", dest="max_patches", type=int, default=3)
@@ -1544,6 +1645,13 @@ def build_parser() -> argparse.ArgumentParser:
     traex_install.add_argument("--project-name", help="Project name to use with --init. Defaults to project directory name.")
     traex_install.add_argument("--skip-reme-check", action="store_true", help="Skip the non-blocking ReMe PATH preflight.")
     traex_install.set_defaults(func=traex_install_command)
+    traex_uninstall = traex_subparsers.add_parser("uninstall", help="Remove Soul from TraeX user config.")
+    traex_uninstall.add_argument("--scope", choices=["user"], default="user")
+    traex_uninstall.add_argument(
+        "--traex-config",
+        help="Override user TraeX config path. Defaults to $TRAE_HOME/traecli.toml or the current user's TraeX home.",
+    )
+    traex_uninstall.set_defaults(func=traex_uninstall_command)
     traex_doctor = traex_subparsers.add_parser("doctor", help="Check whether TraeX can see and has executed Soul hooks.")
     traex_doctor.add_argument("--project-dir", default=".")
     traex_doctor.add_argument(
