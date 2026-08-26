@@ -296,7 +296,7 @@ def test_soul_api_review_expire_and_extend_working_state(tmp_path):
 
     expired = api.expire_review_candidate(candidate_id, reason="stale")
     assert expired["expired"]["status"] == "expired"
-    assert load_working_state(tmp_path)["items"][0]["status"] == "expired"
+    assert load_working_state(tmp_path)["items"][0].get("status") == "expired"
 
 
 def test_soul_api_enqueue_evidence_records_non_blocking_job(tmp_path, monkeypatch):

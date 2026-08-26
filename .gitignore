@@ -34,7 +34,7 @@ Thumbs.db
 # Local experiment and integration workspaces
 experiments/
 /integrations/
-docs/
+docs
 !docs/
 docs/*
 !docs/soul-reme-integration.md

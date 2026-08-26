@@ -17,20 +17,15 @@ from typing import Any, Mapping, NoReturn, cast
 from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
+from soul.services.background.manager import background_service_for_platform
 from soul.services.daemon import (
     daemon_loop,
-    install_macos_launch_agent,
     load_daemon_status,
     load_review_index,
-    macos_launch_agent_status,
     notification_state_path,
     notify_review_index,
     review_index_path,
     scan_registered_projects,
-    start_macos_launch_agent,
-    stop_macos_launch_agent,
-    restart_macos_launch_agent,
-    uninstall_macos_launch_agent,
 )
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
@@ -71,6 +66,10 @@ from soul.services.state_core.working_state import (
 )
 from soul.services.shared.text import compact_text
 from soul.services.project_resolver import load_project_registry, prune_unavailable_projects
+
+
+def mapping_or_empty(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
 
 
 def init_command(args: argparse.Namespace) -> None:
@@ -580,7 +579,7 @@ def daemon_scan_command(args: argparse.Namespace) -> None:
 
 def daemon_status_command(args: argparse.Namespace) -> None:
     status = load_daemon_status()
-    background = macos_launch_agent_status() if sys.platform == "darwin" else {"platform": sys.platform, "unsupported": True}
+    background = background_service_for_platform().status()
     if args.json:
         status = {**status, "background": background}
         print(json.dumps(status, ensure_ascii=False, indent=2))
@@ -595,7 +594,7 @@ def daemon_run_command(args: argparse.Namespace) -> None:
 
 
 def daemon_install_command(args: argparse.Namespace) -> None:
-    result = install_macos_launch_agent(interval_seconds=args.interval_seconds, load=not args.no_load)
+    result = background_service_for_platform().install(interval_seconds=args.interval_seconds, load=not args.no_load)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -603,7 +602,7 @@ def daemon_install_command(args: argparse.Namespace) -> None:
 
 
 def daemon_start_command(args: argparse.Namespace) -> None:
-    result = start_macos_launch_agent()
+    result = background_service_for_platform().start()
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -611,7 +610,7 @@ def daemon_start_command(args: argparse.Namespace) -> None:
 
 
 def daemon_stop_command(args: argparse.Namespace) -> None:
-    result = stop_macos_launch_agent()
+    result = background_service_for_platform().stop()
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -619,7 +618,7 @@ def daemon_stop_command(args: argparse.Namespace) -> None:
 
 
 def daemon_restart_command(args: argparse.Namespace) -> None:
-    result = restart_macos_launch_agent()
+    result = background_service_for_platform().restart()
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -627,7 +626,7 @@ def daemon_restart_command(args: argparse.Namespace) -> None:
 
 
 def daemon_uninstall_command(args: argparse.Namespace) -> None:
-    result = uninstall_macos_launch_agent()
+    result = background_service_for_platform().uninstall()
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -658,8 +657,8 @@ def projects_list_command(args: argparse.Namespace) -> None:
         print("- none")
         return
     for item in projects:
-        review = item.get("review") if isinstance(item.get("review"), Mapping) else {}
-        queue = item.get("queue") if isinstance(item.get("queue"), Mapping) else {}
+        review = mapping_or_empty(item.get("review"))
+        queue = mapping_or_empty(item.get("queue"))
         print(
             f"- {item.get('project_name', 'unknown')} "
             f"[{item.get('status', 'active')}, {item.get('storage', 'local')}] "
@@ -1346,9 +1345,9 @@ def format_daemon_status(status: Mapping[str, Any]) -> str:
         if not item.get("available", False):
             lines.append(f"- {item.get('project_name', 'unknown')}: unavailable ({item.get('error', 'unknown error')})")
             continue
-        review = item.get("review") if isinstance(item.get("review"), Mapping) else {}
-        lifecycle = item.get("lifecycle") if isinstance(item.get("lifecycle"), Mapping) else {}
-        queue = item.get("queue") if isinstance(item.get("queue"), Mapping) else {}
+        review = mapping_or_empty(item.get("review"))
+        lifecycle = mapping_or_empty(item.get("lifecycle"))
+        queue = mapping_or_empty(item.get("queue"))
         lines.append(
             f"- {item.get('project_name', 'unknown')}: "
             f"review={review.get('total', 0)} "
@@ -1365,7 +1364,7 @@ def format_daemon_status(status: Mapping[str, Any]) -> str:
 def format_daemon_notification(result: Mapping[str, Any]) -> str:
     notifications = result.get("notifications")
     candidates = notifications if isinstance(notifications, list) else []
-    delivery = result.get("delivery") if isinstance(result.get("delivery"), Mapping) else {}
+    delivery = mapping_or_empty(result.get("delivery"))
     lines = [
         "Soul Daemon Notification",
         f"- generated_at: {result.get('generated_at', 'never')}",
@@ -1379,7 +1378,7 @@ def format_daemon_notification(result: Mapping[str, Any]) -> str:
         for item in candidates:
             if not isinstance(item, Mapping):
                 continue
-            counts = item.get("counts") if isinstance(item.get("counts"), Mapping) else {}
+            counts = mapping_or_empty(item.get("counts"))
             lines.append(
                 f"  - {item.get('project_name', 'unknown')}: "
                 f"{item.get('reason', 'unknown')} "
@@ -1403,15 +1402,16 @@ def format_daemon_notification(result: Mapping[str, Any]) -> str:
 def format_daemon_background_status(status: Mapping[str, Any]) -> str:
     if status.get("unsupported"):
         return f"Soul Background Service\n- platform: {status.get('platform', 'unknown')}\n- status: unsupported"
+    target = status.get("plist_path") or status.get("task_name") or ""
     lines = [
         "Soul Background Service",
         f"- platform: {status.get('platform', 'unknown')}",
-        f"- label: {status.get('label', '')}",
+        f"- id: {status.get('label') or status.get('task_name') or ''}",
         f"- installed: {bool(status.get('installed', False))}",
         f"- loaded: {bool(status.get('loaded', False))}",
-        f"- plist: {status.get('plist_path', '')}",
+        f"- target: {target}",
     ]
-    launchctl = status.get("launchctl") if isinstance(status.get("launchctl"), Mapping) else {}
+    launchctl = mapping_or_empty(status.get("launchctl"))
     if launchctl.get("stderr") and not status.get("loaded", False):
         lines.append(f"- launchctl: {launchctl.get('stderr')}")
     return "\n".join(lines)
@@ -1420,13 +1420,15 @@ def format_daemon_background_status(status: Mapping[str, Any]) -> str:
 def format_daemon_install_result(result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
         return f"Soul daemon install is unsupported on {result.get('platform', 'unknown')}."
+    target = result.get("plist_path") or result.get("task_name") or ""
     lines = [
         "Installed Soul daemon.",
-        f"- label: {result.get('label', '')}",
-        f"- plist: {result.get('plist_path', '')}",
+        f"- platform: {result.get('platform', 'unknown')}",
+        f"- id: {result.get('label') or result.get('task_name') or ''}",
+        f"- target: {target}",
         f"- loaded: {bool(result.get('loaded', False))}",
     ]
-    bootstrap = result.get("bootstrap") if isinstance(result.get("bootstrap"), Mapping) else {}
+    bootstrap = mapping_or_empty(result.get("bootstrap"))
     if bootstrap.get("stderr") and not result.get("loaded", False):
         lines.append(f"- launchctl: {bootstrap.get('stderr')}")
     return "\n".join(lines)
@@ -1435,11 +1437,13 @@ def format_daemon_install_result(result: Mapping[str, Any]) -> str:
 def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
         return f"Soul daemon uninstall is unsupported on {result.get('platform', 'unknown')}."
+    target = result.get("plist_path") or result.get("task_name") or ""
     return "\n".join(
         [
             "Uninstalled Soul daemon.",
-            f"- label: {result.get('label', '')}",
-            f"- plist: {result.get('plist_path', '')}",
+            f"- platform: {result.get('platform', 'unknown')}",
+            f"- id: {result.get('label') or result.get('task_name') or ''}",
+            f"- target: {target}",
             f"- removed: {bool(result.get('removed', False))}",
         ]
     )
@@ -1450,8 +1454,9 @@ def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> st
         return f"Soul daemon {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
     lines = [
         f"{action} Soul daemon.",
-        f"- label: {result.get('label', '')}",
-        f"- plist: {result.get('plist_path', '')}",
+        f"- platform: {result.get('platform', 'unknown')}",
+        f"- id: {result.get('label') or result.get('task_name') or ''}",
+        f"- target: {result.get('plist_path') or result.get('task_name') or ''}",
         f"- loaded: {bool(result.get('loaded', False))}",
         f"- ok: {bool(result.get('ok', False))}",
     ]
@@ -1462,16 +1467,16 @@ def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> st
 
 
 def format_projects_prune_result(result: Mapping[str, Any]) -> str:
-    removed = result.get("removed") if isinstance(result.get("removed"), list) else []
+    raw_removed: Any = result.get("removed")
+    removed = raw_removed if isinstance(raw_removed, list) else []
+    removed_items = [item for item in removed if isinstance(item, Mapping)]
     lines = [
         "Pruned Soul projects.",
         f"- unavailable_days: {result.get('unavailable_days', 0)}",
-        f"- removed: {result.get('removed_count', len(removed))}",
+        f"- removed: {result.get('removed_count', len(removed_items))}",
         f"- kept: {result.get('kept_count', 0)}",
     ]
-    for item in removed:
-        if not isinstance(item, Mapping):
-            continue
+    for item in removed_items:
         lines.append(f"  - {item.get('project_name', 'unknown')}: {item.get('project_dir', '')}")
     return "\n".join(lines)
 

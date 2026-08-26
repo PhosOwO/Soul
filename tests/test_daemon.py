@@ -11,19 +11,22 @@ from pathlib import Path
 from soul.services.integrations.queue import enqueue_turn_evidence
 from soul.services.project_resolver import register_project
 from soul.services.daemon import (
-    build_macos_launch_agent_plist,
-    install_macos_launch_agent,
-    macos_launch_agent_path,
-    macos_launch_agent_status,
     notification_candidates,
     notification_state_path,
     notify_review_index,
     scan_registered_projects,
     send_desktop_notification,
     should_scan_project_record,
-    uninstall_macos_launch_agent,
     write_review_index,
 )
+from soul.services.background.macos import (
+    build_macos_launch_agent_plist,
+    install_macos_launch_agent,
+    macos_launch_agent_path,
+    macos_launch_agent_status,
+    uninstall_macos_launch_agent,
+)
+from soul.services.background.windows import WindowsBackgroundService
 from soul.services.state_core.state_store import load_state
 from soul.services.state_core.working_state import upsert_working_state_from_evidence
 
@@ -285,7 +288,7 @@ def test_macos_notification_uses_osascript(monkeypatch):
         calls.append((cmd, kwargs))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
-    monkeypatch.setattr("soul.services.daemon.subprocess.run", fake_run)
+    monkeypatch.setattr("soul.services.notifications.macos.subprocess.run", fake_run)
 
     result = send_desktop_notification("Soul Review", "Project has 1 item", platform_name="darwin")
 
@@ -410,9 +413,9 @@ def test_macos_daemon_install_writes_plist_and_bootstraps(tmp_path, monkeypatch)
         calls.append(args)
         return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
 
-    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+    monkeypatch.setattr("soul.services.background.macos.run_launchctl", fake_run_launchctl)
 
-    result = install_macos_launch_agent(interval_seconds=321, platform_name="darwin", home_dir=home)
+    result = install_macos_launch_agent(interval_seconds=321, platform_name="darwin", home_dir=home, user_id=501)
 
     plist_path = macos_launch_agent_path(home_dir=home)
     assert result["ok"] is True
@@ -420,7 +423,7 @@ def test_macos_daemon_install_writes_plist_and_bootstraps(tmp_path, monkeypatch)
     assert result["plist_path"] == str(plist_path)
     assert plist_path.is_file()
     assert calls[0][0] == "bootout"
-    assert calls[1] == ["bootstrap", f"gui/{os.getuid()}", str(plist_path)]
+    assert calls[1] == ["bootstrap", "gui/501", str(plist_path)]
     assert b"<string>321</string>" in plist_path.read_bytes()
 
 
@@ -435,14 +438,14 @@ def test_macos_daemon_uninstall_removes_plist_and_boots_out(tmp_path, monkeypatc
         calls.append(args)
         return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
 
-    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+    monkeypatch.setattr("soul.services.background.macos.run_launchctl", fake_run_launchctl)
 
-    result = uninstall_macos_launch_agent(platform_name="darwin", home_dir=home)
+    result = uninstall_macos_launch_agent(platform_name="darwin", home_dir=home, user_id=501)
 
     assert result["ok"] is True
     assert result["removed"] is True
     assert not plist_path.exists()
-    assert calls == [["bootout", f"gui/{os.getuid()}", str(plist_path)]]
+    assert calls == [["bootout", "gui/501", str(plist_path)]]
 
 
 def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
@@ -452,12 +455,12 @@ def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
     plist_path.write_text("plist", encoding="utf-8")
 
     def fake_run_launchctl(args):
-        assert args == ["print", f"gui/{os.getuid()}/com.soulkit.daemon"]
+        assert args == ["print", "gui/501/com.soulkit.daemon"]
         return subprocess.CompletedProcess(["launchctl", *args], 0, "running", "")
 
-    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+    monkeypatch.setattr("soul.services.background.macos.run_launchctl", fake_run_launchctl)
 
-    result = macos_launch_agent_status(platform_name="darwin", home_dir=home)
+    result = macos_launch_agent_status(platform_name="darwin", home_dir=home, user_id=501)
 
     assert result["installed"] is True
     assert result["loaded"] is True
@@ -490,6 +493,24 @@ def test_daemon_install_cli_no_load_json(tmp_path):
 
     assert payload["ok"] is True
     assert payload["loaded"] is False
-    assert Path(payload["plist_path"]).is_file()
-    plist = plistlib.loads(Path(payload["plist_path"]).read_bytes())
-    assert plist["ProgramArguments"][-1] == "77.0"
+    if payload["platform"] == "darwin":
+        assert Path(payload["plist_path"]).is_file()
+        plist = plistlib.loads(Path(payload["plist_path"]).read_bytes())
+        assert plist["ProgramArguments"][-1] == "77.0"
+    else:
+        assert payload["platform"] == sys.platform
+        assert payload["capability"] == "background_service"
+
+
+def test_windows_background_install_no_load_is_structured(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    result = WindowsBackgroundService().install(interval_seconds=77, load=False)
+
+    assert result["ok"] is True
+    assert result["platform"] == "win32"
+    assert result["task_name"] == "SoulKitDaemon"
+    assert result["loaded"] is False
+    assert Path(str(result["script_path"])).is_file()
+    assert "soul.cli daemon run" in Path(str(result["script_path"])).read_text(encoding="utf-8")

@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
-import os
-import plistlib
-import subprocess
 import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from soul.services.background.macos import (
+    DEFAULT_BACKGROUND_INTERVAL_SECONDS,
+    MACOS_DAEMON_LABEL,
+    MACOS_LAUNCH_AGENT_NAME,
+    MacOSBackgroundService,
+    build_macos_launch_agent_plist,
+    launchctl_result,
+    macos_launch_agent_path,
+    macos_launchd_domain,
+    run_launchctl,
+)
 from soul.services.integrations.queue import (
     EVENT_BLOCKED,
     EVENT_COMPLETED,
@@ -21,10 +29,13 @@ from soul.services.integrations.queue import (
     queue_status,
     replay_queue_state,
 )
+from soul.services.notifications.manager import notifier_for_platform
+from soul.services.notifications.macos import applescript_string
 from soul.services.project_resolver import load_project_registry, projects_registry_path, state_owner_dir_from_record, update_project_registry_records
 from soul.services.state_core.review.card import build_review_card
 from soul.services.state_core.state_store import utc_now
 from soul.services.state_core.working_state import classify_working_item_lifecycle, load_working_state
+from soul.services.shared.state_types import WorkingStateItem
 
 
 DAEMON_STATUS_NAME = "daemon_status.json"
@@ -33,9 +44,10 @@ NOTIFICATION_STATE_NAME = "notification_state.json"
 PROJECT_NOTIFICATION_COOLDOWN_MINUTES = 120
 GLOBAL_NOTIFICATION_COOLDOWN_MINUTES = 15
 QUEUE_BACKLOG_NOTIFICATION_AFTER_MINUTES = 30
-MACOS_DAEMON_LABEL = "com.soulkit.daemon"
-MACOS_LAUNCH_AGENT_NAME = MACOS_DAEMON_LABEL + ".plist"
-DEFAULT_BACKGROUND_INTERVAL_SECONDS = 900
+
+
+def mapping_or_empty(value: Any) -> dict[str, Any]:
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
 def daemon_status_path() -> Path:
@@ -58,214 +70,85 @@ def package_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def macos_launch_agent_path(*, home_dir: Path | None = None) -> Path:
-    return (home_dir or Path.home()) / "Library" / "LaunchAgents" / MACOS_LAUNCH_AGENT_NAME
-
-
-def macos_launchd_domain() -> str:
-    return f"gui/{os.getuid()}"
-
-
-def build_macos_launch_agent_plist(*, interval_seconds: float = DEFAULT_BACKGROUND_INTERVAL_SECONDS) -> dict[str, Any]:
-    logs_dir = daemon_log_dir()
-    pythonpath = str(package_root())
-    current_pythonpath = os.environ.get("PYTHONPATH")
-    if current_pythonpath:
-        pythonpath = pythonpath + os.pathsep + current_pythonpath
-    return {
-        "Label": MACOS_DAEMON_LABEL,
-        "ProgramArguments": [
-            sys.executable,
-            "-m",
-            "soul.cli",
-            "daemon",
-            "run",
-            "--interval-seconds",
-            str(interval_seconds),
-        ],
-        "RunAtLoad": True,
-        "KeepAlive": True,
-        "WorkingDirectory": str(package_root()),
-        "StandardOutPath": str(logs_dir / "daemon.log"),
-        "StandardErrorPath": str(logs_dir / "daemon.err.log"),
-        "EnvironmentVariables": {
-            "PYTHONPATH": pythonpath,
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "SOUL_HOME": str(projects_registry_path().parent),
-        },
-    }
-
-
 def install_macos_launch_agent(
     *,
     interval_seconds: float = DEFAULT_BACKGROUND_INTERVAL_SECONDS,
     load: bool = True,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     platform = platform_name or sys.platform
     if platform != "darwin":
         return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    plist_path = macos_launch_agent_path(home_dir=home_dir)
-    plist = build_macos_launch_agent_plist(interval_seconds=interval_seconds)
-    plist_path.parent.mkdir(parents=True, exist_ok=True)
-    daemon_log_dir().mkdir(parents=True, exist_ok=True)
-    with plist_path.open("wb") as stream:
-        plistlib.dump(plist, stream, sort_keys=False)
-    result: dict[str, Any] = {
-        "ok": True,
-        "platform": platform,
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": str(plist_path),
-        "loaded": False,
-    }
-    if load:
-        bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
-        bootstrap = run_launchctl(["bootstrap", macos_launchd_domain(), str(plist_path)])
-        result["bootout"] = launchctl_result(bootout)
-        result["bootstrap"] = launchctl_result(bootstrap)
-        result["loaded"] = bootstrap.returncode == 0
-        result["ok"] = bootstrap.returncode == 0
-    return result
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).install(interval_seconds=interval_seconds, load=load)
 
 
 def start_macos_launch_agent(
     *,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     platform = platform_name or sys.platform
     if platform != "darwin":
         return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    plist_path = macos_launch_agent_path(home_dir=home_dir)
-    if not plist_path.exists():
-        return {
-            "ok": False,
-            "platform": platform,
-            "label": MACOS_DAEMON_LABEL,
-            "plist_path": str(plist_path),
-            "error": "launch agent is not installed",
-        }
-    bootstrap = run_launchctl(["bootstrap", macos_launchd_domain(), str(plist_path)])
-    return {
-        "ok": bootstrap.returncode == 0,
-        "platform": platform,
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": str(plist_path),
-        "loaded": bootstrap.returncode == 0,
-        "bootstrap": launchctl_result(bootstrap),
-    }
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).start()
 
 
 def stop_macos_launch_agent(
     *,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     platform = platform_name or sys.platform
     if platform != "darwin":
         return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    plist_path = macos_launch_agent_path(home_dir=home_dir)
-    bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
-    return {
-        "ok": bootout.returncode == 0,
-        "platform": platform,
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": str(plist_path),
-        "loaded": False,
-        "bootout": launchctl_result(bootout),
-    }
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).stop()
 
 
 def restart_macos_launch_agent(
     *,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
-    stop_result = stop_macos_launch_agent(platform_name=platform_name, home_dir=home_dir)
-    start_result = start_macos_launch_agent(platform_name=platform_name, home_dir=home_dir)
-    return {
-        "ok": bool(start_result.get("ok")),
-        "platform": start_result.get("platform", stop_result.get("platform")),
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": start_result.get("plist_path", stop_result.get("plist_path")),
-        "loaded": bool(start_result.get("loaded", False)),
-        "stop": stop_result,
-        "start": start_result,
-    }
+    platform = platform_name or sys.platform
+    if platform != "darwin":
+        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).restart()
 
 
 def uninstall_macos_launch_agent(
     *,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     platform = platform_name or sys.platform
     if platform != "darwin":
         return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    plist_path = macos_launch_agent_path(home_dir=home_dir)
-    bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
-    removed = False
-    try:
-        if plist_path.exists():
-            plist_path.unlink()
-            removed = True
-    except OSError as exc:
-        return {
-            "ok": False,
-            "platform": platform,
-            "label": MACOS_DAEMON_LABEL,
-            "plist_path": str(plist_path),
-            "removed": removed,
-            "bootout": launchctl_result(bootout),
-            "error": str(exc),
-        }
-    return {
-        "ok": bootout.returncode == 0 or removed,
-        "platform": platform,
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": str(plist_path),
-        "removed": removed,
-        "bootout": launchctl_result(bootout),
-    }
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).uninstall()
 
 
 def macos_launch_agent_status(
     *,
     platform_name: str | None = None,
     home_dir: Path | None = None,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     platform = platform_name or sys.platform
-    plist_path = macos_launch_agent_path(home_dir=home_dir)
-    result: dict[str, Any] = {
-        "platform": platform,
-        "label": MACOS_DAEMON_LABEL,
-        "plist_path": str(plist_path),
-        "installed": plist_path.exists(),
-        "loaded": False,
-    }
     if platform != "darwin":
-        result["unsupported"] = True
-        return result
-    status = run_launchctl(["print", f"{macos_launchd_domain()}/{MACOS_DAEMON_LABEL}"])
-    result["launchctl"] = launchctl_result(status)
-    result["loaded"] = status.returncode == 0
-    return result
-
-
-def run_launchctl(args: list[str]) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(["launchctl", *args], check=False, capture_output=True, text=True)
-    except OSError as exc:
-        return subprocess.CompletedProcess(["launchctl", *args], 127, "", str(exc))
-
-
-def launchctl_result(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    return {
-        "returncode": result.returncode,
-        "stdout": (result.stdout or "").strip(),
-        "stderr": (result.stderr or "").strip(),
-    }
+        return {
+            "platform": platform,
+            "label": MACOS_DAEMON_LABEL,
+            "plist_path": str(macos_launch_agent_path(home_dir=home_dir)),
+            "installed": False,
+            "loaded": False,
+            "unsupported": True,
+        }
+    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).status()
 
 
 def working_lifecycle_summary(
@@ -290,7 +173,8 @@ def working_lifecycle_summary(
     for item in doc.get("items", []):
         if not isinstance(item, dict):
             continue
-        lifecycle = classify_working_item_lifecycle(item, near_expiry_hours=near_expiry_hours, now=current_time)
+        working_item = cast(WorkingStateItem, item)
+        lifecycle = classify_working_item_lifecycle(working_item, near_expiry_hours=near_expiry_hours, now=current_time)
         summary["total"] += 1
         if lifecycle.active_for_context:
             summary["active_working"] += 1
@@ -304,7 +188,7 @@ def working_lifecycle_summary(
             summary["ready_to_confirm"] += 1
         elif lifecycle.review_bucket == "needs_review":
             summary["needs_review"] += 1
-        next_boundary = next_working_lifecycle_boundary(item, now=current_time, near_expiry_hours=near_expiry_hours)
+        next_boundary = next_working_lifecycle_boundary(working_item, now=current_time, near_expiry_hours=near_expiry_hours)
         if next_boundary and (
             summary["next_lifecycle_scan_at"] is None
             or next_boundary < str(summary["next_lifecycle_scan_at"])
@@ -313,7 +197,7 @@ def working_lifecycle_summary(
     return summary
 
 
-def next_working_lifecycle_boundary(item: dict[str, Any], *, now: datetime, near_expiry_hours: int = 4) -> str | None:
+def next_working_lifecycle_boundary(item: WorkingStateItem, *, now: datetime, near_expiry_hours: int = 4) -> str | None:
     candidates: list[datetime] = []
     for key in ["review_after", "expires_at"]:
         parsed = parse_utc_time(item.get(key))
@@ -528,8 +412,8 @@ def scan_registered_projects(
 def should_scan_project_record(record: dict[str, Any], *, now: datetime) -> bool:
     if record.get("status") == "unavailable":
         return True
-    review = record.get("review") if isinstance(record.get("review"), dict) else {}
-    queue = record.get("queue") if isinstance(record.get("queue"), dict) else {}
+    review = mapping_or_empty(record.get("review"))
+    queue = mapping_or_empty(record.get("queue"))
     if int(review.get("total") or 0) > 0:
         return True
     if int(queue.get("backlog") or 0) > 0:
@@ -549,8 +433,8 @@ def project_result_from_registry_record(record: dict[str, Any]) -> dict[str, Any
         "available": record.get("status") != "unavailable",
         "status": record.get("status") or "active",
         "lifecycle": {"next_lifecycle_scan_at": record.get("next_lifecycle_scan_at")},
-        "review": record.get("review") if isinstance(record.get("review"), dict) else empty_review_summary(),
-        "queue": record.get("queue") if isinstance(record.get("queue"), dict) else empty_queue_summary(),
+        "review": mapping_or_empty(record.get("review")) or empty_review_summary(),
+        "queue": mapping_or_empty(record.get("queue")) or empty_queue_summary(),
     }
 
 
@@ -640,7 +524,7 @@ def notify_review_index(
     current_time = now or datetime.now(UTC)
     current_iso = current_time.replace(microsecond=0).isoformat().replace("+00:00", "Z")
     state = load_notification_state()
-    projects_state = state.get("projects") if isinstance(state.get("projects"), dict) else {}
+    projects_state = mapping_or_empty(state.get("projects"))
     candidates = notification_candidates(current_index, state, now=current_time)
     result: dict[str, Any] = {
         "schema_version": 1,
@@ -657,7 +541,7 @@ def notify_review_index(
             project_id = str(project.get("project_id") or "")
             if not project_id:
                 continue
-            project_state = projects_state.get(project_id) if isinstance(projects_state.get(project_id), dict) else {}
+            project_state = mapping_or_empty(projects_state.get(project_id))
             projects_state[project_id] = {
                 **project_state,
                 "last_observed_at": current_iso,
@@ -673,7 +557,7 @@ def notify_review_index(
                     project_id = str(candidate.get("project_id") or "")
                     if not project_id:
                         continue
-                    project_state = projects_state.get(project_id) if isinstance(projects_state.get(project_id), dict) else {}
+                    project_state = mapping_or_empty(projects_state.get(project_id))
                     projects_state[project_id] = {
                         **project_state,
                         "last_signature": candidate.get("signature"),
@@ -699,7 +583,7 @@ def notification_candidates(
     last_global = parse_utc_time(state.get("last_notified_at"))
     if last_global and now - last_global < timedelta(minutes=global_cooldown_minutes):
         return []
-    projects_state = state.get("projects") if isinstance(state.get("projects"), dict) else {}
+    projects_state = mapping_or_empty(state.get("projects"))
     candidates: list[dict[str, Any]] = []
     for project in index.get("projects", []):
         if not isinstance(project, dict) or project.get("available") is False:
@@ -711,13 +595,13 @@ def notification_candidates(
         queue_old_enough = queue_backlog_old_enough(project, now=now)
         if counts["review_total"] <= 0 and not queue_old_enough:
             continue
-        previous = projects_state.get(project_id) if isinstance(projects_state.get(project_id), dict) else {}
+        previous = mapping_or_empty(projects_state.get(project_id))
         last_project = parse_utc_time(previous.get("last_notified_at"))
         signature = notification_signature(counts)
         if previous.get("last_signature") == signature and last_project:
             if now - last_project < timedelta(minutes=project_cooldown_minutes):
                 continue
-        notified_counts = previous.get("last_notified_counts") if isinstance(previous.get("last_notified_counts"), dict) else {}
+        notified_counts = mapping_or_empty(previous.get("last_notified_counts"))
         reason = notification_reason(counts, notified_counts, queue_old_enough=queue_old_enough)
         if reason is None:
             continue
@@ -735,8 +619,8 @@ def notification_candidates(
 
 
 def notification_counts(project: dict[str, Any]) -> dict[str, int]:
-    review = project.get("review") if isinstance(project.get("review"), dict) else {}
-    queue = project.get("queue") if isinstance(project.get("queue"), dict) else {}
+    review = mapping_or_empty(project.get("review"))
+    queue = mapping_or_empty(project.get("queue"))
     return {
         "needs_review": int(review.get("needs_review") or 0),
         "ready_to_confirm": int(review.get("ready_to_confirm") or 0),
@@ -781,7 +665,7 @@ def queue_backlog_old_enough(
     now: datetime,
     threshold_minutes: int = QUEUE_BACKLOG_NOTIFICATION_AFTER_MINUTES,
 ) -> bool:
-    queue = project.get("queue") if isinstance(project.get("queue"), dict) else {}
+    queue = mapping_or_empty(project.get("queue"))
     if int(queue.get("backlog") or 0) <= 0:
         return False
     oldest = parse_utc_time(queue.get("oldest_backlog_at"))
@@ -805,22 +689,7 @@ def format_notification_message(candidates: list[dict[str, Any]]) -> tuple[str, 
 
 
 def send_desktop_notification(title: str, body: str, *, platform_name: str | None = None) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"attempted": False, "delivered": False, "skipped": True, "platform": platform}
-    script = f"display notification {applescript_string(body)} with title {applescript_string(title)}"
-    try:
-        completed = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
-    except OSError as exc:
-        return {"attempted": True, "delivered": False, "platform": platform, "error": str(exc)}
-    if completed.returncode != 0:
-        error = (completed.stderr or completed.stdout or "").strip()
-        return {"attempted": True, "delivered": False, "platform": platform, "error": error}
-    return {"attempted": True, "delivered": True, "platform": platform}
-
-
-def applescript_string(value: str) -> str:
-    return json.dumps(value)
+    return notifier_for_platform(platform_name).send(title, body)
 
 
 def parse_utc_time(value: Any) -> datetime | None:
