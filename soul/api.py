@@ -28,7 +28,7 @@ from soul.services.reme.reme_transition import propose_reme_transition as propos
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
-from soul.services.daemon import load_review_index, scan_registered_projects
+from soul.services.daemon import load_review_index, refresh_registered_project, refresh_registered_project_for_state_owner, scan_registered_projects
 from soul.services.project_resolver import load_project_registry, register_project, resolve_project_dir, state_owner_dir_from_record
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, propose_patch
 from soul.services.state_core.review.actions import (
@@ -167,6 +167,7 @@ class SoulApi:
                 "background_drain_started": background_drain_started,
             }
         )
+        self.refresh_current_review_project()
         return {
             "memory_mode": MEMORY_MODE_SOUL_REME,
             "queued": True,
@@ -320,8 +321,13 @@ class SoulApi:
     def refresh_review_index(self, *, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
         return scan_registered_projects(limit=limit, near_expiry_hours=near_expiry_hours)
 
+    def refresh_current_review_project(self) -> dict[str, Any] | None:
+        return refresh_registered_project_for_state_owner(self.project_dir)
+
     def accept_review_candidate(self, candidate_id: str, confirmed_by: str = HOST_SOUL_HTTP_API) -> dict[str, Any]:
-        return accept_review_candidate(self.project_dir, candidate_id, confirmed_by=confirmed_by)
+        result = accept_review_candidate(self.project_dir, candidate_id, confirmed_by=confirmed_by)
+        self.refresh_current_review_project()
+        return result
 
     def accept_project_review_candidate(
         self,
@@ -331,7 +337,7 @@ class SoulApi:
     ) -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = accept_review_candidate(project_dir, candidate_id, confirmed_by=confirmed_by)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
     def reject_review_candidate(
@@ -341,7 +347,9 @@ class SoulApi:
         reason: str = "",
         rejected_by: str = HOST_SOUL_HTTP_API,
     ) -> dict[str, Any]:
-        return reject_review_candidate(self.project_dir, candidate_id, reason=reason, rejected_by=rejected_by)
+        result = reject_review_candidate(self.project_dir, candidate_id, reason=reason, rejected_by=rejected_by)
+        self.refresh_current_review_project()
+        return result
 
     def reject_project_review_candidate(
         self,
@@ -353,43 +361,51 @@ class SoulApi:
     ) -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = reject_review_candidate(project_dir, candidate_id, reason=reason, rejected_by=rejected_by)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
     def edit_review_candidate(self, candidate_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return edit_review_candidate(self.project_dir, candidate_id, payload)
+        result = edit_review_candidate(self.project_dir, candidate_id, payload)
+        self.refresh_current_review_project()
+        return result
 
     def edit_project_review_candidate(self, project_id: str, candidate_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = edit_review_candidate(project_dir, candidate_id, payload)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
     def snooze_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
-        return snooze_review_candidate(self.project_dir, candidate_id, hours=hours)
+        result = snooze_review_candidate(self.project_dir, candidate_id, hours=hours)
+        self.refresh_current_review_project()
+        return result
 
     def snooze_project_review_candidate(self, project_id: str, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = snooze_review_candidate(project_dir, candidate_id, hours=hours)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
     def expire_review_candidate(self, candidate_id: str, *, reason: str = "") -> dict[str, Any]:
-        return expire_review_candidate(self.project_dir, candidate_id, reason=reason)
+        result = expire_review_candidate(self.project_dir, candidate_id, reason=reason)
+        self.refresh_current_review_project()
+        return result
 
     def expire_project_review_candidate(self, project_id: str, candidate_id: str, *, reason: str = "") -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = expire_review_candidate(project_dir, candidate_id, reason=reason)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
     def extend_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
-        return extend_review_candidate(self.project_dir, candidate_id, hours=hours)
+        result = extend_review_candidate(self.project_dir, candidate_id, hours=hours)
+        self.refresh_current_review_project()
+        return result
 
     def extend_project_review_candidate(self, project_id: str, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
         project_dir, _record = self.project_review_target(project_id)
         result = extend_review_candidate(project_dir, candidate_id, hours=hours)
-        self.refresh_review_index()
+        refresh_registered_project(project_id)
         return result
 
 def build_agent_injection(context: str) -> str:

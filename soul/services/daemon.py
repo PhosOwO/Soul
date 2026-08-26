@@ -53,6 +53,133 @@ def working_lifecycle_summary(state_owner_dir: Path, *, project_name: str, near_
     return summary
 
 
+def empty_review_summary() -> dict[str, int]:
+    return {"ready_to_confirm": 0, "needs_review": 0, "total": 0, "available": 0}
+
+
+def empty_queue_summary() -> dict[str, int]:
+    return {"queued": 0, "started": 0, "failed_retryable": 0, "blocked": 0, "dead_letter": 0, "backlog": 0}
+
+
+def scan_project_record(
+    record: dict[str, Any],
+    *,
+    now: str,
+    limit: int = 5,
+    near_expiry_hours: int = 4,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_project_dir = record.get("project_dir")
+    project_dir = Path(str(raw_project_dir or ".")).expanduser().resolve()
+    state_owner_dir = state_owner_dir_from_record(record)
+    base_project = {
+        "project_id": record.get("project_id"),
+        "project_dir": str(project_dir),
+        "project_name": record.get("project_name") or project_dir.name,
+        "state_root": record.get("state_root"),
+        "storage": record.get("storage"),
+    }
+    if not raw_project_dir or not project_dir.exists():
+        result = {
+            **base_project,
+            "available": False,
+            "status": "unavailable",
+            "error": "project directory does not exist",
+            "review": empty_review_summary(),
+            "queue": empty_queue_summary(),
+        }
+        return result, {
+            **record,
+            "status": "unavailable",
+            "last_scanned_at": now,
+            "unavailable_since": record.get("unavailable_since") or now,
+            "review": result["review"],
+            "queue": result["queue"],
+        }
+    if record.get("storage") != "global" and record.get("state_path") and not Path(str(record["state_path"])).exists():
+        result = {
+            **base_project,
+            "available": False,
+            "status": "unavailable",
+            "error": "project state does not exist",
+            "review": empty_review_summary(),
+            "queue": empty_queue_summary(),
+        }
+        return result, {
+            **record,
+            "status": "unavailable",
+            "last_scanned_at": now,
+            "unavailable_since": record.get("unavailable_since") or now,
+            "review": result["review"],
+            "queue": result["queue"],
+        }
+    try:
+        project_name = str(record.get("project_name") or project_dir.name)
+        card = build_review_card(
+            state_owner_dir,
+            limit=limit,
+            near_expiry_hours=near_expiry_hours,
+            project_name=project_name,
+            source_project_dir=project_dir,
+        )
+        queue = queue_status(state_owner_dir)
+        counts = card.get("counts", {})
+        lifecycle = working_lifecycle_summary(
+            state_owner_dir,
+            project_name=project_name,
+            near_expiry_hours=near_expiry_hours,
+        )
+        review = {
+            "ready_to_confirm": counts.get("ready_to_confirm", 0),
+            "needs_review": counts.get("needs_review", 0),
+            "total": counts.get("total", 0),
+            "available": counts.get("available", 0),
+        }
+        queue_summary = {
+            "queued": queue.queued,
+            "started": queue.started,
+            "failed_retryable": queue.failed_retryable,
+            "blocked": queue.blocked,
+            "dead_letter": queue.dead_letter,
+            "backlog": queue.queued + queue.failed_retryable,
+        }
+        result = {
+            **base_project,
+            "project_name": card.get("project") or project_name,
+            "available": True,
+            "status": "active",
+            "lifecycle": lifecycle,
+            "review": review,
+            "queue": queue_summary,
+        }
+        return result, {
+            **record,
+            "project_name": result["project_name"],
+            "status": "active",
+            "last_scanned_at": now,
+            "last_reviewable_at": now if review["total"] or queue_summary["backlog"] else record.get("last_reviewable_at"),
+            "unavailable_since": None,
+            "review": review,
+            "queue": queue_summary,
+        }
+    except Exception as exc:
+        result = {
+            **base_project,
+            "available": False,
+            "status": "unavailable",
+            "error": str(exc).replace("\n", " ")[:500],
+            "review": empty_review_summary(),
+            "queue": empty_queue_summary(),
+        }
+        return result, {
+            **record,
+            "status": "unavailable",
+            "last_scanned_at": now,
+            "unavailable_since": record.get("unavailable_since") or now,
+            "review": result["review"],
+            "queue": result["queue"],
+        }
+
+
 def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
     registry = load_project_registry()
     results: list[dict[str, Any]] = []
@@ -61,128 +188,9 @@ def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> d
     for item in registry.get("projects", []):
         if not isinstance(item, dict):
             continue
-        raw_project_dir = item.get("project_dir")
-        if not raw_project_dir:
-            continue
-        project_dir = Path(str(raw_project_dir)).expanduser().resolve()
-        state_owner_dir = state_owner_dir_from_record(item)
-        base_project = {
-            "project_id": item.get("project_id"),
-            "project_dir": str(project_dir),
-            "project_name": item.get("project_name") or project_dir.name,
-            "state_root": item.get("state_root"),
-            "storage": item.get("storage"),
-        }
-        if not project_dir.exists():
-            unavailable_since = item.get("unavailable_since") or now
-            result = {
-                **base_project,
-                "available": False,
-                "status": "unavailable",
-                "error": "project directory does not exist",
-                "review": {"ready_to_confirm": 0, "needs_review": 0, "total": 0, "available": 0},
-                "queue": {"queued": 0, "started": 0, "failed_retryable": 0, "blocked": 0, "dead_letter": 0, "backlog": 0},
-            }
-            results.append(result)
-            updated_records.append(
-                {
-                    **item,
-                    "status": "unavailable",
-                    "last_scanned_at": now,
-                    "unavailable_since": unavailable_since,
-                    "review": result["review"],
-                    "queue": result["queue"],
-                }
-            )
-            continue
-        if item.get("storage") != "global" and item.get("state_path") and not Path(str(item["state_path"])).exists():
-            unavailable_since = item.get("unavailable_since") or now
-            result = {
-                **base_project,
-                "available": False,
-                "status": "unavailable",
-                "error": "project state does not exist",
-                "review": {"ready_to_confirm": 0, "needs_review": 0, "total": 0, "available": 0},
-                "queue": {"queued": 0, "started": 0, "failed_retryable": 0, "blocked": 0, "dead_letter": 0, "backlog": 0},
-            }
-            results.append(result)
-            updated_records.append(
-                {
-                    **item,
-                    "status": "unavailable",
-                    "last_scanned_at": now,
-                    "unavailable_since": unavailable_since,
-                    "review": result["review"],
-                    "queue": result["queue"],
-                }
-            )
-            continue
-        try:
-            card = build_review_card(state_owner_dir, limit=limit, near_expiry_hours=near_expiry_hours)
-            queue = queue_status(state_owner_dir)
-            counts = card.get("counts", {})
-            lifecycle = working_lifecycle_summary(
-                state_owner_dir,
-                project_name=str(item.get("project_name") or project_dir.name),
-                near_expiry_hours=near_expiry_hours,
-            )
-            review = {
-                "ready_to_confirm": counts.get("ready_to_confirm", 0),
-                "needs_review": counts.get("needs_review", 0),
-                "total": counts.get("total", 0),
-                "available": counts.get("available", 0),
-            }
-            queue_summary = {
-                "queued": queue.queued,
-                "started": queue.started,
-                "failed_retryable": queue.failed_retryable,
-                "blocked": queue.blocked,
-                "dead_letter": queue.dead_letter,
-                "backlog": queue.queued + queue.failed_retryable,
-            }
-            result = {
-                **base_project,
-                "project_name": card.get("project") or item.get("project_name") or project_dir.name,
-                "available": True,
-                "status": "active",
-                "lifecycle": lifecycle,
-                "review": review,
-                "queue": queue_summary,
-            }
-            results.append(result)
-            updated_records.append(
-                {
-                    **item,
-                    "project_name": result["project_name"],
-                    "status": "active",
-                    "last_scanned_at": now,
-                    "last_reviewable_at": now if review["total"] or queue_summary["backlog"] else item.get("last_reviewable_at"),
-                    "unavailable_since": None,
-                    "review": review,
-                    "queue": queue_summary,
-                }
-            )
-        except Exception as exc:
-            unavailable_since = item.get("unavailable_since") or now
-            result = {
-                **base_project,
-                "available": False,
-                "status": "unavailable",
-                "error": str(exc).replace("\n", " ")[:500],
-                "review": {"ready_to_confirm": 0, "needs_review": 0, "total": 0, "available": 0},
-                "queue": {"queued": 0, "started": 0, "failed_retryable": 0, "blocked": 0, "dead_letter": 0, "backlog": 0},
-            }
-            results.append(result)
-            updated_records.append(
-                {
-                    **item,
-                    "status": "unavailable",
-                    "last_scanned_at": now,
-                    "unavailable_since": unavailable_since,
-                    "review": result["review"],
-                    "queue": result["queue"],
-                }
-            )
+        result, updated_record = scan_project_record(item, now=now, limit=limit, near_expiry_hours=near_expiry_hours)
+        results.append(result)
+        updated_records.append(updated_record)
     status = {
         "schema_version": 1,
         "generated_at": now,
@@ -194,6 +202,60 @@ def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> d
     write_review_index(status)
     write_daemon_status(status)
     return status
+
+
+def refresh_registered_project(
+    project_id: str,
+    *,
+    limit: int = 5,
+    near_expiry_hours: int = 4,
+) -> dict[str, Any] | None:
+    registry = load_project_registry()
+    records = [item for item in registry.get("projects", []) if isinstance(item, dict)]
+    target = next((item for item in records if item.get("project_id") == project_id), None)
+    if target is None:
+        return None
+    now = utc_now()
+    result, updated_record = scan_project_record(target, now=now, limit=limit, near_expiry_hours=near_expiry_hours)
+    updated_records = [updated_record if item.get("project_id") == project_id else item for item in records]
+    update_project_registry_records(updated_records)
+    merge_review_project(result, generated_at=now)
+    return result
+
+
+def refresh_registered_project_for_state_owner(state_owner_dir: Path) -> dict[str, Any] | None:
+    owner = state_owner_dir.expanduser().resolve()
+    registry = load_project_registry()
+    for record in registry.get("projects", []):
+        if isinstance(record, dict) and state_owner_dir_from_record(record) == owner:
+            return refresh_registered_project(str(record.get("project_id") or ""))
+    return None
+
+
+def merge_review_project(project: dict[str, Any], *, generated_at: str) -> dict[str, Any]:
+    index = load_review_index()
+    projects = [item for item in index.get("projects", []) if isinstance(item, dict)]
+    project_id = project.get("project_id")
+    replaced = False
+    merged: list[dict[str, Any]] = []
+    for item in projects:
+        if item.get("project_id") == project_id:
+            merged.append(project)
+            replaced = True
+        else:
+            merged.append(item)
+    if not replaced:
+        merged.append(project)
+    next_index = {
+        **index,
+        "schema_version": 1,
+        "generated_at": generated_at,
+        "project_count": len(merged),
+        "projects": merged,
+    }
+    write_review_index(next_index)
+    write_daemon_status(next_index)
+    return next_index
 
 
 def load_daemon_status() -> dict[str, Any]:

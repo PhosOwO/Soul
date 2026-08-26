@@ -205,6 +205,7 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             memory_mode=result.get("memory_mode"),
             reme_write_mode=result.get("reme_write_mode"),
         )
+        refresh_review_index_for_project(project_dir)
         return {"job_id": job_id, "status": EVENT_COMPLETED, "working_state_id": working_state_id}
     except Exception as exc:
         retryable = is_retryable_error(exc)
@@ -220,6 +221,15 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             next_run_at=next_run_at(selection.attempt) if retryable and selection.attempt < MAX_ATTEMPTS else None,
         )
         return {"job_id": job_id, "status": event, "error": compact_error(exc)}
+
+
+def refresh_review_index_for_project(project_dir: Path) -> None:
+    try:
+        from soul.services.daemon import refresh_registered_project_for_state_owner
+
+        refresh_registered_project_for_state_owner(project_dir)
+    except Exception:
+        return
 
 
 def select_runnable_jobs(queue_state: dict[str, Any], *, now: datetime, limit: int) -> list[QueueSelection]:

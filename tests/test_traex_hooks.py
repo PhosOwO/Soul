@@ -761,6 +761,9 @@ def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path)
     job = json.loads(jobs[-1])
     assert job["source"] == "codex"
     assert job["payload"]["outcome"] == "Use the shared hook runtime for host adapters."
+    review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
+    assert review_index["projects"][0]["project_id"] == project_id_for_path(project)
+    assert review_index["projects"][0]["queue"]["backlog"] == 1
     assert not (project / ".soul").exists()
 
 

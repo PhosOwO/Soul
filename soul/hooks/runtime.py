@@ -124,6 +124,7 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
                 },
             },
         )
+        refresh_review_index(project_record)
     except Exception as exc:
         heartbeat = append_hook_run(
             project_dir,
@@ -287,6 +288,18 @@ def add_heartbeat_diagnostic(output: dict[str, Any], heartbeat: dict[str, Any]) 
 
 def compact_error(exc: Exception) -> str:
     return str(exc).replace("\n", " ")[:500]
+
+
+def refresh_review_index(project_record: dict[str, Any]) -> None:
+    project_id = project_record.get("project_id")
+    if not project_id:
+        return
+    try:
+        from soul.services.daemon import refresh_registered_project
+
+        refresh_registered_project(str(project_id))
+    except Exception:
+        return
 
 
 def start_queue_drain(project_dir: Path, *, source_project_dir: Path | None = None) -> bool:
