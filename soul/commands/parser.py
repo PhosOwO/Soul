@@ -17,7 +17,15 @@ from typing import Any, Mapping, NoReturn, cast
 from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
-from soul.services.daemon import daemon_loop, load_daemon_status, review_index_path, scan_registered_projects
+from soul.services.daemon import (
+    daemon_loop,
+    load_daemon_status,
+    load_review_index,
+    notification_state_path,
+    notify_review_index,
+    review_index_path,
+    scan_registered_projects,
+)
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
@@ -576,6 +584,19 @@ def daemon_run_command(args: argparse.Namespace) -> None:
     daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
 
 
+def daemon_notify_command(args: argparse.Namespace) -> None:
+    index = (
+        scan_registered_projects(limit=args.limit, near_expiry_hours=args.near_expiry_hours)
+        if args.scan
+        else load_review_index()
+    )
+    result = notify_review_index(index, dry_run=args.dry_run)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_notification(result))
+
+
 def projects_list_command(args: argparse.Namespace) -> None:
     registry = load_project_registry()
     projects = [item for item in registry.get("projects", []) if isinstance(item, dict)]
@@ -1074,7 +1095,7 @@ def uninstall_managed_config(config_path: Path, *, begin_marker: str, end_marker
 
 def purge_global_state_files() -> list[Path]:
     removed: list[Path] = []
-    for path in [soul_home() / "projects.json", soul_home() / "daemon_status.json", review_index_path()]:
+    for path in [soul_home() / "projects.json", soul_home() / "daemon_status.json", review_index_path(), notification_state_path()]:
         try:
             if path.exists() and path.is_file():
                 path.unlink()
@@ -1280,6 +1301,44 @@ def format_daemon_status(status: Mapping[str, Any]) -> str:
             f"queue={queue.get('backlog', queue.get('queued', 0) + queue.get('failed_retryable', 0))} backlog"
         )
         lines.append(f"  path: {item.get('project_dir', '')}")
+    return "\n".join(lines)
+
+
+def format_daemon_notification(result: Mapping[str, Any]) -> str:
+    notifications = result.get("notifications")
+    candidates = notifications if isinstance(notifications, list) else []
+    delivery = result.get("delivery") if isinstance(result.get("delivery"), Mapping) else {}
+    lines = [
+        "Soul Daemon Notification",
+        f"- generated_at: {result.get('generated_at', 'never')}",
+        f"- dry_run: {bool(result.get('dry_run', False))}",
+        f"- would_notify: {bool(result.get('would_notify', False))}",
+    ]
+    if not candidates:
+        lines.append("- notifications: none")
+    else:
+        lines.append(f"- notifications: {len(candidates)}")
+        for item in candidates:
+            if not isinstance(item, Mapping):
+                continue
+            counts = item.get("counts") if isinstance(item.get("counts"), Mapping) else {}
+            lines.append(
+                f"  - {item.get('project_name', 'unknown')}: "
+                f"{item.get('reason', 'unknown')} "
+                f"(review={counts.get('review_total', 0)}, "
+                f"needs={counts.get('needs_review', 0)}, "
+                f"ready={counts.get('ready_to_confirm', 0)}, "
+                f"queue={counts.get('queue_backlog', 0)})"
+            )
+    lines.append(
+        "- delivery: "
+        f"attempted={bool(delivery.get('attempted', False))}, "
+        f"delivered={bool(delivery.get('delivered', False))}, "
+        f"skipped={bool(delivery.get('skipped', False))}, "
+        f"platform={delivery.get('platform', 'unknown')}"
+    )
+    if delivery.get("error"):
+        lines.append(f"- error: {delivery.get('error')}")
     return "\n".join(lines)
 
 
@@ -1650,6 +1709,13 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_run.add_argument("--interval-seconds", type=float, default=300.0)
     daemon_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
     daemon_run.set_defaults(func=daemon_run_command)
+    daemon_notify = daemon_subparsers.add_parser("notify", help="Send a desktop reminder for reviewable projects.")
+    daemon_notify.add_argument("--dry-run", action="store_true", help="Evaluate notification candidates without sending.")
+    daemon_notify.add_argument("--json", action="store_true", help="Print machine-readable notification result.")
+    daemon_notify.add_argument("--scan", action="store_true", help="Refresh the global review index before notifying.")
+    daemon_notify.add_argument("--limit", type=int, default=5)
+    daemon_notify.add_argument("--near-expiry-hours", type=int, default=4)
+    daemon_notify.set_defaults(func=daemon_notify_command)
 
     projects_parser = subparsers.add_parser("projects", help="Inspect globally registered Soul projects.")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command", required=True)
