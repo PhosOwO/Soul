@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -10,10 +11,17 @@ from pathlib import Path
 from soul.services.integrations.queue import enqueue_turn_evidence
 from soul.services.project_resolver import register_project
 from soul.services.daemon import (
+    build_macos_launch_agent_plist,
+    install_macos_launch_agent,
+    macos_launch_agent_path,
+    macos_launch_agent_status,
     notification_candidates,
     notification_state_path,
     notify_review_index,
+    scan_registered_projects,
     send_desktop_notification,
+    should_scan_project_record,
+    uninstall_macos_launch_agent,
     write_review_index,
 )
 from soul.services.state_core.state_store import load_state
@@ -118,6 +126,92 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     assert "Project: review=2" in status.stdout
     assert "working=1 active/2 due/1 expired" in status.stdout
     assert "queue=1 backlog" in status.stdout
+
+
+def test_daemon_scan_records_next_lifecycle_boundary(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "project"
+    project.mkdir()
+    load_state(project, project_name="Project")
+    review_after = (datetime.now(UTC) + timedelta(hours=1)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    expires_at = (datetime.now(UTC) + timedelta(hours=6)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    upsert_working_state_from_evidence(
+        project,
+        {
+            "source": "test",
+            "task": "future lifecycle",
+            "summary": "未来需要 review。",
+            "evidence_refs": [{"type": "reme_file", "path": "daily/future.md"}],
+            "working_state": {
+                "route": "working_state",
+                "statement": "未来需要 review。",
+                "reason": "验证生命周期扫描边界。",
+                "scope": "lifecycle",
+                "review_after": review_after,
+                "expires": expires_at,
+            },
+        },
+    )
+    register_project(project, project_name="Project")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "daemon", "scan", "--json"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["projects"][0]["lifecycle"]["next_lifecycle_scan_at"] == review_after
+    registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
+    assert registry["projects"][0]["next_lifecycle_scan_at"] == review_after
+
+
+def test_daemon_due_only_scan_skips_projects_before_lifecycle_boundary(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "project"
+    project.mkdir()
+    load_state(project, project_name="Project")
+    record = register_project(project, project_name="Project")
+    future = (datetime.now(UTC) + timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    record["next_lifecycle_scan_at"] = future
+    record["review"] = {"total": 0, "needs_review": 0, "ready_to_confirm": 0}
+    record["queue"] = {"backlog": 0}
+    from soul.services.project_resolver import update_project_registry_records
+
+    update_project_registry_records([record])
+
+    status = scan_registered_projects(due_only=True)
+
+    assert status["projects"][0]["scan_skipped"] is True
+    assert status["projects"][0]["lifecycle"]["next_lifecycle_scan_at"] == future
+
+
+def test_lifecycle_scan_keeps_projects_with_pending_work_due():
+    future = (datetime.now(UTC) + timedelta(hours=2)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    assert should_scan_project_record(
+        {
+            "status": "active",
+            "next_lifecycle_scan_at": future,
+            "review": {"total": 1},
+            "queue": {"backlog": 0},
+        },
+        now=datetime.now(UTC),
+    )
+    assert should_scan_project_record(
+        {
+            "status": "active",
+            "next_lifecycle_scan_at": future,
+            "review": {"total": 0},
+            "queue": {"backlog": 1},
+        },
+        now=datetime.now(UTC),
+    )
 
 
 def test_daemon_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
@@ -289,3 +383,113 @@ def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch
     assert payload["would_notify"] is True
     assert payload["notifications"][0]["project_id"] == "project-1"
     assert not (soul_home / "notification_state.json").exists()
+
+
+def test_macos_launch_agent_plist_runs_daemon_loop(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    plist = build_macos_launch_agent_plist(interval_seconds=123)
+
+    assert plist["Label"] == "com.soulkit.daemon"
+    assert plist["ProgramArguments"][:5] == [sys.executable, "-m", "soul.cli", "daemon", "run"]
+    assert plist["ProgramArguments"][-1] == "123"
+    assert plist["RunAtLoad"] is True
+    assert plist["KeepAlive"] is True
+    assert plist["EnvironmentVariables"]["SOUL_HOME"] == str(soul_home.resolve())
+    assert plist["StandardOutPath"] == str(soul_home.resolve() / "logs" / "daemon.log")
+
+
+def test_macos_daemon_install_writes_plist_and_bootstraps(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    home = tmp_path / "home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    calls = []
+
+    def fake_run_launchctl(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
+
+    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+
+    result = install_macos_launch_agent(interval_seconds=321, platform_name="darwin", home_dir=home)
+
+    plist_path = macos_launch_agent_path(home_dir=home)
+    assert result["ok"] is True
+    assert result["loaded"] is True
+    assert result["plist_path"] == str(plist_path)
+    assert plist_path.is_file()
+    assert calls[0][0] == "bootout"
+    assert calls[1] == ["bootstrap", f"gui/{os.getuid()}", str(plist_path)]
+    assert b"<string>321</string>" in plist_path.read_bytes()
+
+
+def test_macos_daemon_uninstall_removes_plist_and_boots_out(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    plist_path = macos_launch_agent_path(home_dir=home)
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_text("plist", encoding="utf-8")
+    calls = []
+
+    def fake_run_launchctl(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(["launchctl", *args], 0, "", "")
+
+    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+
+    result = uninstall_macos_launch_agent(platform_name="darwin", home_dir=home)
+
+    assert result["ok"] is True
+    assert result["removed"] is True
+    assert not plist_path.exists()
+    assert calls == [["bootout", f"gui/{os.getuid()}", str(plist_path)]]
+
+
+def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    plist_path = macos_launch_agent_path(home_dir=home)
+    plist_path.parent.mkdir(parents=True)
+    plist_path.write_text("plist", encoding="utf-8")
+
+    def fake_run_launchctl(args):
+        assert args == ["print", f"gui/{os.getuid()}/com.soulkit.daemon"]
+        return subprocess.CompletedProcess(["launchctl", *args], 0, "running", "")
+
+    monkeypatch.setattr("soul.services.daemon.run_launchctl", fake_run_launchctl)
+
+    result = macos_launch_agent_status(platform_name="darwin", home_dir=home)
+
+    assert result["installed"] is True
+    assert result["loaded"] is True
+    assert result["launchctl"]["stdout"] == "running"
+
+
+def test_daemon_install_cli_no_load_json(tmp_path):
+    soul_home = tmp_path / "soul-home"
+    home = tmp_path / "home"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "daemon",
+            "install",
+            "--no-load",
+            "--interval-seconds",
+            "77",
+            "--json",
+        ],
+        cwd=ROOT,
+        env={**cli_env(soul_home), "HOME": str(home)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["ok"] is True
+    assert payload["loaded"] is False
+    assert Path(payload["plist_path"]).is_file()
+    plist = plistlib.loads(Path(payload["plist_path"]).read_bytes())
+    assert plist["ProgramArguments"][-1] == "77.0"

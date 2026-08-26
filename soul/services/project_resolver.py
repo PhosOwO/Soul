@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,7 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
         "last_seen_at": str(record.get("last_seen_at") or now),
         "last_scanned_at": record.get("last_scanned_at"),
         "last_reviewable_at": record.get("last_reviewable_at"),
+        "next_lifecycle_scan_at": record.get("next_lifecycle_scan_at"),
         "unavailable_since": record.get("unavailable_since"),
         "review": record.get("review") if isinstance(record.get("review"), dict) else {},
         "queue": record.get("queue") if isinstance(record.get("queue"), dict) else {},
@@ -152,6 +154,7 @@ def register_project(
         "first_seen_at": (existing or {}).get("first_seen_at") or now,
         "last_seen_at": now,
         "last_scanned_at": (existing or {}).get("last_scanned_at"),
+        "next_lifecycle_scan_at": (existing or {}).get("next_lifecycle_scan_at"),
         "unavailable_since": None,
     }
     if existing is None:
@@ -225,6 +228,45 @@ def update_project_registry_records(records: list[dict[str, Any]]) -> dict[str, 
     }
     save_project_registry(registry)
     return registry
+
+
+def prune_unavailable_projects(*, unavailable_days: int) -> dict[str, Any]:
+    cutoff = datetime.now(UTC) - timedelta(days=max(unavailable_days, 0))
+    registry = load_project_registry()
+    kept: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for record in registry.get("projects", []):
+        if not isinstance(record, dict):
+            continue
+        if record.get("status") != "unavailable":
+            kept.append(record)
+            continue
+        unavailable_since = parse_registry_time(record.get("unavailable_since"))
+        if unavailable_since is None or unavailable_since > cutoff:
+            kept.append(record)
+            continue
+        removed.append(record)
+    next_registry = update_project_registry_records(kept) if removed or projects_registry_path().exists() else registry
+    return {
+        "schema_version": 1,
+        "removed_count": len(removed),
+        "kept_count": len(kept),
+        "unavailable_days": unavailable_days,
+        "removed": removed,
+        "registry": next_registry,
+    }
+
+
+def parse_registry_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def save_project_registry(registry: dict[str, Any]) -> None:

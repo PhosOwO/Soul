@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import plistlib
 import subprocess
 import sys
 import time
@@ -31,6 +33,9 @@ NOTIFICATION_STATE_NAME = "notification_state.json"
 PROJECT_NOTIFICATION_COOLDOWN_MINUTES = 120
 GLOBAL_NOTIFICATION_COOLDOWN_MINUTES = 15
 QUEUE_BACKLOG_NOTIFICATION_AFTER_MINUTES = 30
+MACOS_DAEMON_LABEL = "com.soulkit.daemon"
+MACOS_LAUNCH_AGENT_NAME = MACOS_DAEMON_LABEL + ".plist"
+DEFAULT_BACKGROUND_INTERVAL_SECONDS = 900
 
 
 def daemon_status_path() -> Path:
@@ -45,8 +50,233 @@ def notification_state_path() -> Path:
     return projects_registry_path().with_name(NOTIFICATION_STATE_NAME)
 
 
-def working_lifecycle_summary(state_owner_dir: Path, *, project_name: str, near_expiry_hours: int = 4) -> dict[str, int]:
+def daemon_log_dir() -> Path:
+    return projects_registry_path().parent / "logs"
+
+
+def package_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def macos_launch_agent_path(*, home_dir: Path | None = None) -> Path:
+    return (home_dir or Path.home()) / "Library" / "LaunchAgents" / MACOS_LAUNCH_AGENT_NAME
+
+
+def macos_launchd_domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def build_macos_launch_agent_plist(*, interval_seconds: float = DEFAULT_BACKGROUND_INTERVAL_SECONDS) -> dict[str, Any]:
+    logs_dir = daemon_log_dir()
+    pythonpath = str(package_root())
+    current_pythonpath = os.environ.get("PYTHONPATH")
+    if current_pythonpath:
+        pythonpath = pythonpath + os.pathsep + current_pythonpath
+    return {
+        "Label": MACOS_DAEMON_LABEL,
+        "ProgramArguments": [
+            sys.executable,
+            "-m",
+            "soul.cli",
+            "daemon",
+            "run",
+            "--interval-seconds",
+            str(interval_seconds),
+        ],
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "WorkingDirectory": str(package_root()),
+        "StandardOutPath": str(logs_dir / "daemon.log"),
+        "StandardErrorPath": str(logs_dir / "daemon.err.log"),
+        "EnvironmentVariables": {
+            "PYTHONPATH": pythonpath,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "SOUL_HOME": str(projects_registry_path().parent),
+        },
+    }
+
+
+def install_macos_launch_agent(
+    *,
+    interval_seconds: float = DEFAULT_BACKGROUND_INTERVAL_SECONDS,
+    load: bool = True,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    platform = platform_name or sys.platform
+    if platform != "darwin":
+        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
+    plist_path = macos_launch_agent_path(home_dir=home_dir)
+    plist = build_macos_launch_agent_plist(interval_seconds=interval_seconds)
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    daemon_log_dir().mkdir(parents=True, exist_ok=True)
+    with plist_path.open("wb") as stream:
+        plistlib.dump(plist, stream, sort_keys=False)
+    result: dict[str, Any] = {
+        "ok": True,
+        "platform": platform,
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": str(plist_path),
+        "loaded": False,
+    }
+    if load:
+        bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
+        bootstrap = run_launchctl(["bootstrap", macos_launchd_domain(), str(plist_path)])
+        result["bootout"] = launchctl_result(bootout)
+        result["bootstrap"] = launchctl_result(bootstrap)
+        result["loaded"] = bootstrap.returncode == 0
+        result["ok"] = bootstrap.returncode == 0
+    return result
+
+
+def start_macos_launch_agent(
+    *,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    platform = platform_name or sys.platform
+    if platform != "darwin":
+        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
+    plist_path = macos_launch_agent_path(home_dir=home_dir)
+    if not plist_path.exists():
+        return {
+            "ok": False,
+            "platform": platform,
+            "label": MACOS_DAEMON_LABEL,
+            "plist_path": str(plist_path),
+            "error": "launch agent is not installed",
+        }
+    bootstrap = run_launchctl(["bootstrap", macos_launchd_domain(), str(plist_path)])
+    return {
+        "ok": bootstrap.returncode == 0,
+        "platform": platform,
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": str(plist_path),
+        "loaded": bootstrap.returncode == 0,
+        "bootstrap": launchctl_result(bootstrap),
+    }
+
+
+def stop_macos_launch_agent(
+    *,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    platform = platform_name or sys.platform
+    if platform != "darwin":
+        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
+    plist_path = macos_launch_agent_path(home_dir=home_dir)
+    bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
+    return {
+        "ok": bootout.returncode == 0,
+        "platform": platform,
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": str(plist_path),
+        "loaded": False,
+        "bootout": launchctl_result(bootout),
+    }
+
+
+def restart_macos_launch_agent(
+    *,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    stop_result = stop_macos_launch_agent(platform_name=platform_name, home_dir=home_dir)
+    start_result = start_macos_launch_agent(platform_name=platform_name, home_dir=home_dir)
+    return {
+        "ok": bool(start_result.get("ok")),
+        "platform": start_result.get("platform", stop_result.get("platform")),
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": start_result.get("plist_path", stop_result.get("plist_path")),
+        "loaded": bool(start_result.get("loaded", False)),
+        "stop": stop_result,
+        "start": start_result,
+    }
+
+
+def uninstall_macos_launch_agent(
+    *,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    platform = platform_name or sys.platform
+    if platform != "darwin":
+        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
+    plist_path = macos_launch_agent_path(home_dir=home_dir)
+    bootout = run_launchctl(["bootout", macos_launchd_domain(), str(plist_path)])
+    removed = False
+    try:
+        if plist_path.exists():
+            plist_path.unlink()
+            removed = True
+    except OSError as exc:
+        return {
+            "ok": False,
+            "platform": platform,
+            "label": MACOS_DAEMON_LABEL,
+            "plist_path": str(plist_path),
+            "removed": removed,
+            "bootout": launchctl_result(bootout),
+            "error": str(exc),
+        }
+    return {
+        "ok": bootout.returncode == 0 or removed,
+        "platform": platform,
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": str(plist_path),
+        "removed": removed,
+        "bootout": launchctl_result(bootout),
+    }
+
+
+def macos_launch_agent_status(
+    *,
+    platform_name: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    platform = platform_name or sys.platform
+    plist_path = macos_launch_agent_path(home_dir=home_dir)
+    result: dict[str, Any] = {
+        "platform": platform,
+        "label": MACOS_DAEMON_LABEL,
+        "plist_path": str(plist_path),
+        "installed": plist_path.exists(),
+        "loaded": False,
+    }
+    if platform != "darwin":
+        result["unsupported"] = True
+        return result
+    status = run_launchctl(["print", f"{macos_launchd_domain()}/{MACOS_DAEMON_LABEL}"])
+    result["launchctl"] = launchctl_result(status)
+    result["loaded"] = status.returncode == 0
+    return result
+
+
+def run_launchctl(args: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(["launchctl", *args], check=False, capture_output=True, text=True)
+    except OSError as exc:
+        return subprocess.CompletedProcess(["launchctl", *args], 127, "", str(exc))
+
+
+def launchctl_result(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "returncode": result.returncode,
+        "stdout": (result.stdout or "").strip(),
+        "stderr": (result.stderr or "").strip(),
+    }
+
+
+def working_lifecycle_summary(
+    state_owner_dir: Path,
+    *,
+    project_name: str,
+    near_expiry_hours: int = 4,
+    now: datetime | None = None,
+) -> dict[str, int | str | None]:
     doc = load_working_state(state_owner_dir, project_name=project_name)
+    current_time = now or datetime.now(UTC)
     summary = {
         "total": 0,
         "active_working": 0,
@@ -55,9 +285,12 @@ def working_lifecycle_summary(state_owner_dir: Path, *, project_name: str, near_
         "expired_unresolved": 0,
         "ready_to_confirm": 0,
         "needs_review": 0,
+        "next_lifecycle_scan_at": None,
     }
     for item in doc.get("items", []):
-        lifecycle = classify_working_item_lifecycle(item, near_expiry_hours=near_expiry_hours)
+        if not isinstance(item, dict):
+            continue
+        lifecycle = classify_working_item_lifecycle(item, near_expiry_hours=near_expiry_hours, now=current_time)
         summary["total"] += 1
         if lifecycle.active_for_context:
             summary["active_working"] += 1
@@ -71,7 +304,29 @@ def working_lifecycle_summary(state_owner_dir: Path, *, project_name: str, near_
             summary["ready_to_confirm"] += 1
         elif lifecycle.review_bucket == "needs_review":
             summary["needs_review"] += 1
+        next_boundary = next_working_lifecycle_boundary(item, now=current_time, near_expiry_hours=near_expiry_hours)
+        if next_boundary and (
+            summary["next_lifecycle_scan_at"] is None
+            or next_boundary < str(summary["next_lifecycle_scan_at"])
+        ):
+            summary["next_lifecycle_scan_at"] = next_boundary
     return summary
+
+
+def next_working_lifecycle_boundary(item: dict[str, Any], *, now: datetime, near_expiry_hours: int = 4) -> str | None:
+    candidates: list[datetime] = []
+    for key in ["review_after", "expires_at"]:
+        parsed = parse_utc_time(item.get(key))
+        if parsed and parsed > now:
+            candidates.append(parsed)
+    expires_at = parse_utc_time(item.get("expires_at"))
+    if expires_at is not None:
+        near_expiry_at = expires_at - timedelta(hours=near_expiry_hours)
+        if near_expiry_at > now:
+            candidates.append(near_expiry_at)
+    if not candidates:
+        return None
+    return min(candidates).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def empty_review_summary() -> dict[str, int]:
@@ -173,10 +428,12 @@ def scan_project_record(
         )
         queue = queue_status(state_owner_dir)
         counts = card.get("counts", {})
+        scan_time = parse_utc_time(now) or datetime.now(UTC)
         lifecycle = working_lifecycle_summary(
             state_owner_dir,
             project_name=project_name,
             near_expiry_hours=near_expiry_hours,
+            now=scan_time,
         )
         review = {
             "ready_to_confirm": counts.get("ready_to_confirm", 0),
@@ -208,6 +465,7 @@ def scan_project_record(
             "status": "active",
             "last_scanned_at": now,
             "last_reviewable_at": now if review["total"] or queue_summary["backlog"] else record.get("last_reviewable_at"),
+            "next_lifecycle_scan_at": lifecycle.get("next_lifecycle_scan_at"),
             "unavailable_since": None,
             "review": review,
             "queue": queue_summary,
@@ -231,13 +489,25 @@ def scan_project_record(
         }
 
 
-def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
+def scan_registered_projects(
+    *,
+    limit: int = 5,
+    near_expiry_hours: int = 4,
+    due_only: bool = False,
+) -> dict[str, Any]:
     registry = load_project_registry()
     results: list[dict[str, Any]] = []
     updated_records: list[dict[str, Any]] = []
     now = utc_now()
+    current_time = parse_utc_time(now) or datetime.now(UTC)
     for item in registry.get("projects", []):
         if not isinstance(item, dict):
+            continue
+        if due_only and not should_scan_project_record(item, now=current_time):
+            normalized = project_result_from_registry_record(item)
+            normalized["scan_skipped"] = True
+            results.append(normalized)
+            updated_records.append(item)
             continue
         result, updated_record = scan_project_record(item, now=now, limit=limit, near_expiry_hours=near_expiry_hours)
         results.append(result)
@@ -253,6 +523,35 @@ def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> d
     write_review_index(status)
     write_daemon_status(status)
     return status
+
+
+def should_scan_project_record(record: dict[str, Any], *, now: datetime) -> bool:
+    if record.get("status") == "unavailable":
+        return True
+    review = record.get("review") if isinstance(record.get("review"), dict) else {}
+    queue = record.get("queue") if isinstance(record.get("queue"), dict) else {}
+    if int(review.get("total") or 0) > 0:
+        return True
+    if int(queue.get("backlog") or 0) > 0:
+        return True
+    next_scan = parse_utc_time(record.get("next_lifecycle_scan_at"))
+    return next_scan is None or next_scan <= now
+
+
+def project_result_from_registry_record(record: dict[str, Any]) -> dict[str, Any]:
+    project_dir = Path(str(record.get("project_dir") or ".")).expanduser().resolve()
+    return {
+        "project_id": record.get("project_id"),
+        "project_dir": str(project_dir),
+        "project_name": record.get("project_name") or project_dir.name,
+        "state_root": record.get("state_root"),
+        "storage": record.get("storage"),
+        "available": record.get("status") != "unavailable",
+        "status": record.get("status") or "active",
+        "lifecycle": {"next_lifecycle_scan_at": record.get("next_lifecycle_scan_at")},
+        "review": record.get("review") if isinstance(record.get("review"), dict) else empty_review_summary(),
+        "queue": record.get("queue") if isinstance(record.get("queue"), dict) else empty_queue_summary(),
+    }
 
 
 def refresh_registered_project(
@@ -572,7 +871,7 @@ def write_review_index(index: dict[str, Any]) -> None:
 
 def daemon_loop(*, interval_seconds: float = 300.0, once: bool = False) -> None:
     while True:
-        status = scan_registered_projects()
+        status = scan_registered_projects(due_only=True)
         notify_review_index(status)
         if once:
             return

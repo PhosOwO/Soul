@@ -19,12 +19,18 @@ from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
 from soul.services.daemon import (
     daemon_loop,
+    install_macos_launch_agent,
     load_daemon_status,
     load_review_index,
+    macos_launch_agent_status,
     notification_state_path,
     notify_review_index,
     review_index_path,
     scan_registered_projects,
+    start_macos_launch_agent,
+    stop_macos_launch_agent,
+    restart_macos_launch_agent,
+    uninstall_macos_launch_agent,
 )
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
@@ -64,7 +70,7 @@ from soul.services.state_core.working_state import (
     review_working_items,
 )
 from soul.services.shared.text import compact_text
-from soul.services.project_resolver import load_project_registry
+from soul.services.project_resolver import load_project_registry, prune_unavailable_projects
 
 
 def init_command(args: argparse.Namespace) -> None:
@@ -574,14 +580,58 @@ def daemon_scan_command(args: argparse.Namespace) -> None:
 
 def daemon_status_command(args: argparse.Namespace) -> None:
     status = load_daemon_status()
+    background = macos_launch_agent_status() if sys.platform == "darwin" else {"platform": sys.platform, "unsupported": True}
     if args.json:
+        status = {**status, "background": background}
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return
     print(format_daemon_status(status))
+    print("")
+    print(format_daemon_background_status(background))
 
 
 def daemon_run_command(args: argparse.Namespace) -> None:
     daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
+
+
+def daemon_install_command(args: argparse.Namespace) -> None:
+    result = install_macos_launch_agent(interval_seconds=args.interval_seconds, load=not args.no_load)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_install_result(result))
+
+
+def daemon_start_command(args: argparse.Namespace) -> None:
+    result = start_macos_launch_agent()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_lifecycle_result("Started", result))
+
+
+def daemon_stop_command(args: argparse.Namespace) -> None:
+    result = stop_macos_launch_agent()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_lifecycle_result("Stopped", result))
+
+
+def daemon_restart_command(args: argparse.Namespace) -> None:
+    result = restart_macos_launch_agent()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_lifecycle_result("Restarted", result))
+
+
+def daemon_uninstall_command(args: argparse.Namespace) -> None:
+    result = uninstall_macos_launch_agent()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_uninstall_result(result))
 
 
 def daemon_notify_command(args: argparse.Namespace) -> None:
@@ -618,6 +668,14 @@ def projects_list_command(args: argparse.Namespace) -> None:
         print(f"  id: {item.get('project_id', '')}")
         print(f"  path: {item.get('project_dir', '')}")
         print(f"  state: {item.get('state_root', '')}")
+
+
+def projects_prune_command(args: argparse.Namespace) -> None:
+    result = prune_unavailable_projects(unavailable_days=args.unavailable_days)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_projects_prune_result(result))
 
 
 def uninstall_command(args: argparse.Namespace) -> None:
@@ -1342,6 +1400,82 @@ def format_daemon_notification(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_daemon_background_status(status: Mapping[str, Any]) -> str:
+    if status.get("unsupported"):
+        return f"Soul Background Service\n- platform: {status.get('platform', 'unknown')}\n- status: unsupported"
+    lines = [
+        "Soul Background Service",
+        f"- platform: {status.get('platform', 'unknown')}",
+        f"- label: {status.get('label', '')}",
+        f"- installed: {bool(status.get('installed', False))}",
+        f"- loaded: {bool(status.get('loaded', False))}",
+        f"- plist: {status.get('plist_path', '')}",
+    ]
+    launchctl = status.get("launchctl") if isinstance(status.get("launchctl"), Mapping) else {}
+    if launchctl.get("stderr") and not status.get("loaded", False):
+        lines.append(f"- launchctl: {launchctl.get('stderr')}")
+    return "\n".join(lines)
+
+
+def format_daemon_install_result(result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul daemon install is unsupported on {result.get('platform', 'unknown')}."
+    lines = [
+        "Installed Soul daemon.",
+        f"- label: {result.get('label', '')}",
+        f"- plist: {result.get('plist_path', '')}",
+        f"- loaded: {bool(result.get('loaded', False))}",
+    ]
+    bootstrap = result.get("bootstrap") if isinstance(result.get("bootstrap"), Mapping) else {}
+    if bootstrap.get("stderr") and not result.get("loaded", False):
+        lines.append(f"- launchctl: {bootstrap.get('stderr')}")
+    return "\n".join(lines)
+
+
+def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul daemon uninstall is unsupported on {result.get('platform', 'unknown')}."
+    return "\n".join(
+        [
+            "Uninstalled Soul daemon.",
+            f"- label: {result.get('label', '')}",
+            f"- plist: {result.get('plist_path', '')}",
+            f"- removed: {bool(result.get('removed', False))}",
+        ]
+    )
+
+
+def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul daemon {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
+    lines = [
+        f"{action} Soul daemon.",
+        f"- label: {result.get('label', '')}",
+        f"- plist: {result.get('plist_path', '')}",
+        f"- loaded: {bool(result.get('loaded', False))}",
+        f"- ok: {bool(result.get('ok', False))}",
+    ]
+    for key in ["error"]:
+        if result.get(key):
+            lines.append(f"- {key}: {result.get(key)}")
+    return "\n".join(lines)
+
+
+def format_projects_prune_result(result: Mapping[str, Any]) -> str:
+    removed = result.get("removed") if isinstance(result.get("removed"), list) else []
+    lines = [
+        "Pruned Soul projects.",
+        f"- unavailable_days: {result.get('unavailable_days', 0)}",
+        f"- removed: {result.get('removed_count', len(removed))}",
+        f"- kept: {result.get('kept_count', 0)}",
+    ]
+    for item in removed:
+        if not isinstance(item, Mapping):
+            continue
+        lines.append(f"  - {item.get('project_name', 'unknown')}: {item.get('project_dir', '')}")
+    return "\n".join(lines)
+
+
 def newest_files(root: Path, *, limit: int, names: set[str] | None = None) -> list[Path]:
     if not root.exists():
         return []
@@ -1709,6 +1843,23 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_run.add_argument("--interval-seconds", type=float, default=300.0)
     daemon_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
     daemon_run.set_defaults(func=daemon_run_command)
+    daemon_install = daemon_subparsers.add_parser("install", help="Install the user-level macOS background daemon.")
+    daemon_install.add_argument("--interval-seconds", type=float, default=900.0)
+    daemon_install.add_argument("--no-load", action="store_true", help="Write the launchd plist without loading it.")
+    daemon_install.add_argument("--json", action="store_true")
+    daemon_install.set_defaults(func=daemon_install_command)
+    daemon_start = daemon_subparsers.add_parser("start", help="Load the installed user-level macOS daemon.")
+    daemon_start.add_argument("--json", action="store_true")
+    daemon_start.set_defaults(func=daemon_start_command)
+    daemon_stop = daemon_subparsers.add_parser("stop", help="Unload the installed user-level macOS daemon.")
+    daemon_stop.add_argument("--json", action="store_true")
+    daemon_stop.set_defaults(func=daemon_stop_command)
+    daemon_restart = daemon_subparsers.add_parser("restart", help="Reload the installed user-level macOS daemon.")
+    daemon_restart.add_argument("--json", action="store_true")
+    daemon_restart.set_defaults(func=daemon_restart_command)
+    daemon_uninstall = daemon_subparsers.add_parser("uninstall", help="Unload and remove the user-level macOS daemon.")
+    daemon_uninstall.add_argument("--json", action="store_true")
+    daemon_uninstall.set_defaults(func=daemon_uninstall_command)
     daemon_notify = daemon_subparsers.add_parser("notify", help="Send a desktop reminder for reviewable projects.")
     daemon_notify.add_argument("--dry-run", action="store_true", help="Evaluate notification candidates without sending.")
     daemon_notify.add_argument("--json", action="store_true", help="Print machine-readable notification result.")
@@ -1722,6 +1873,10 @@ def build_parser() -> argparse.ArgumentParser:
     projects_list = projects_subparsers.add_parser("list", help="List projects known to Soul.")
     projects_list.add_argument("--json", action="store_true")
     projects_list.set_defaults(func=projects_list_command)
+    projects_prune = projects_subparsers.add_parser("prune", help="Remove long-unavailable projects from registry.")
+    projects_prune.add_argument("--unavailable-days", type=int, default=30)
+    projects_prune.add_argument("--json", action="store_true")
+    projects_prune.set_defaults(func=projects_prune_command)
 
     traex_parser = subparsers.add_parser("traex", help="TraeX project integration helpers.")
     traex_subparsers = traex_parser.add_subparsers(dest="traex_command", required=True)
