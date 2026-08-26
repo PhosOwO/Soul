@@ -12,8 +12,12 @@ from typing import Any
 from soul.services.reme.runtime_config import build_reme_subprocess_env
 
 
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
 def hidden_subprocess_kwargs() -> dict[str, Any]:
-    if os.name != "nt":
+    if not is_windows():
         return {}
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -31,7 +35,7 @@ def reme_command(
     prefer_module: bool = False,
     use_pythonw: bool = False,
 ) -> list[str]:
-    if os.name != "nt" or not prefer_module:
+    if not is_windows() or not prefer_module:
         return [cli_path or "reme", *args]
     executable = reme_python_executable(cli_path=cli_path, use_pythonw=use_pythonw)
     return [str(executable), "-m", "reme.reme", *args]
@@ -167,11 +171,11 @@ class ReMeCliAdapter:
         command = reme_command(
             reme_args,
             cli_path=result.cli_path,
-            prefer_module=os.name == "nt" and not foreground,
-            use_pythonw=os.name == "nt" and not foreground,
+            prefer_module=is_windows() and not foreground,
+            use_pythonw=is_windows() and not foreground,
         )
         env = build_reme_subprocess_env(self.project_dir)
-        if os.name == "nt" and not foreground:
+        if is_windows() and not foreground:
             subprocess.Popen(
                 command,
                 cwd=self.project_dir,

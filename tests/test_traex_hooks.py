@@ -9,6 +9,7 @@ from shutil import copytree
 from typing import Any
 
 from soul.hooks.runtime import append_hook_run, run_stop_hook
+from soul.services.project_resolver import global_project_dir, project_id_for_path
 from soul.services.state import load_state
 
 
@@ -356,7 +357,7 @@ def test_reme_doctor_reports_missing_cli_without_failing(tmp_path: Path) -> None
     completed = subprocess.run(
         [sys.executable, "-m", "soul.cli", "reme", "doctor", "--project-dir", str(tmp_path)],
         cwd=ROOT,
-        env={**cli_env(), "PATH": ""},
+        env={**cli_env(), "HOME": str(tmp_path / "home"), "SOUL_HOME": str(tmp_path / "soul-home"), "PATH": ""},
         text=True,
         capture_output=True,
         check=True,
@@ -727,7 +728,9 @@ def test_traex_stop_hook_records_evidence_without_blocking() -> None:
 def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path) -> None:
     project = tmp_path / "consumer"
     project.mkdir()
-    env = {**cli_env(), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"}
+    (project / ".git").mkdir()
+    soul_home = tmp_path / "soul-home"
+    env = {**cli_env(), "SOUL_HOME": str(soul_home), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"}
     payload = {
         "cwd": str(project),
         "prompt": "Capture a durable rule",
@@ -748,20 +751,53 @@ def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path)
 
     output = json.loads(completed.stdout)
     assert "Soul queued evidence job" in output["systemMessage"]
-    hook_runs = (project / ".soul" / "state" / "hook_runs.jsonl").read_text(encoding="utf-8").splitlines()
+    state_owner = soul_home / "projects" / project_id_for_path(project)
+    hook_runs = (state_owner / ".soul" / "state" / "hook_runs.jsonl").read_text(encoding="utf-8").splitlines()
     heartbeat = json.loads(hook_runs[-1])
     assert heartbeat["host"] == "codex"
     assert heartbeat["queued"] is True
-    jobs = (project / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
+    assert heartbeat["source_project_dir"] == str(project.resolve())
+    jobs = (state_owner / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
     job = json.loads(jobs[-1])
     assert job["source"] == "codex"
     assert job["payload"]["outcome"] == "Use the shared hook runtime for host adapters."
+    assert not (project / ".soul").exists()
+
+
+def test_generic_hook_skips_non_git_directory_without_creating_soul(tmp_path: Path) -> None:
+    project = tmp_path / "plain"
+    project.mkdir()
+    soul_home = tmp_path / "soul-home"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "hook", "stop", "--host", "codex"],
+        cwd=ROOT,
+        input=json.dumps(
+            {
+                "cwd": str(project),
+                "prompt": "Capture this",
+                "last_assistant_message": "This should not be stored.",
+                "session_id": "plain-session",
+                "hook_event_name": "Stop",
+            }
+        ),
+        env={**cli_env(), "SOUL_HOME": str(soul_home), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == {"suppressOutput": True}
+    assert not (project / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
 
 
 def test_hook_heartbeat_write_failure_is_reported(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "consumer"
     project.mkdir()
+    (project / ".git").mkdir()
     monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
 
     def fail_hook_run(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {
@@ -794,7 +830,9 @@ def test_hook_heartbeat_write_failure_is_reported(tmp_path: Path, monkeypatch) -
 def test_stop_hook_uses_thread_name_as_stable_session_fallback(tmp_path: Path, monkeypatch) -> None:
     project = tmp_path / "consumer"
     project.mkdir()
+    (project / ".git").mkdir()
     monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
 
     result = run_stop_hook(
         {
@@ -807,7 +845,8 @@ def test_stop_hook_uses_thread_name_as_stable_session_fallback(tmp_path: Path, m
         host="traex",
     )
 
-    jobs = (project / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
+    state_owner = global_project_dir(project_id_for_path(project))
+    jobs = (state_owner / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
     job = json.loads(jobs[-1])
 
     assert result.heartbeat["session_id"].startswith("session-")
@@ -834,6 +873,7 @@ def test_append_hook_run_reports_write_failure(tmp_path: Path) -> None:
 def test_traex_hooks_load_soul_from_npm_package_layout(tmp_path: Path) -> None:
     project = tmp_path / "consumer"
     project.mkdir()
+    (project / ".git").mkdir()
     copytree(ROOT / ".trae", project / ".trae")
     package_root = project / "node_modules" / "@soulkit" / "soul"
     copytree(ROOT / "soul", package_root / "soul")

@@ -90,6 +90,13 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     assert payload["projects"][0]["lifecycle"]["expired_unresolved"] == 1
     assert payload["projects"][0]["queue"]["backlog"] == 1
     assert (soul_home / "daemon_status.json").is_file()
+    assert (soul_home / "review_index.json").is_file()
+    review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
+    assert review_index["projects"][0]["review"]["needs_review"] == 2
+    registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
+    assert registry["projects"][0]["status"] == "active"
+    assert registry["projects"][0]["last_scanned_at"]
+    assert registry["projects"][0]["review"]["total"] == 2
 
     status = subprocess.run(
         [sys.executable, "-m", "soul.cli", "daemon", "status"],
@@ -104,3 +111,27 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     assert "Project: review=2" in status.stdout
     assert "working=1 active/2 due/1 expired" in status.stdout
     assert "queue=1 backlog" in status.stdout
+
+
+def test_daemon_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    missing_project = tmp_path / "missing"
+    register_project(missing_project, project_name="Missing")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "daemon", "scan", "--json"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["projects"][0]["available"] is False
+    assert payload["projects"][0]["status"] == "unavailable"
+    assert payload["projects"][0]["error"] == "project directory does not exist"
+    registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
+    assert registry["projects"][0]["status"] == "unavailable"
+    assert registry["projects"][0]["unavailable_since"]

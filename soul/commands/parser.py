@@ -17,7 +17,7 @@ from typing import Any, Mapping, NoReturn, cast
 from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
-from soul.services.daemon import daemon_loop, load_daemon_status, scan_registered_projects
+from soul.services.daemon import daemon_loop, load_daemon_status, review_index_path, scan_registered_projects
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
@@ -56,6 +56,7 @@ from soul.services.state_core.working_state import (
     review_working_items,
 )
 from soul.services.shared.text import compact_text
+from soul.services.project_resolver import load_project_registry
 
 
 def init_command(args: argparse.Namespace) -> None:
@@ -369,7 +370,7 @@ def review_web_command(args: argparse.Namespace) -> None:
     print(f"Starting Soul Review for {project_dir.resolve()}: {review_url}")
     if not args.review_no_open:
         threading.Timer(0.8, lambda: webbrowser.open(review_url)).start()
-    serve(project_dir, host=args.review_host, port=args.review_port)
+    serve(project_dir, host=args.review_host, port=args.review_port, register=False)
 
 
 def import_codex_command(args: argparse.Namespace) -> None:
@@ -572,6 +573,29 @@ def daemon_status_command(args: argparse.Namespace) -> None:
 
 def daemon_run_command(args: argparse.Namespace) -> None:
     daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
+
+
+def projects_list_command(args: argparse.Namespace) -> None:
+    registry = load_project_registry()
+    projects = [item for item in registry.get("projects", []) if isinstance(item, dict)]
+    if args.json:
+        print(json.dumps(registry, ensure_ascii=False, indent=2))
+        return
+    print("Soul Projects")
+    if not projects:
+        print("- none")
+        return
+    for item in projects:
+        review = item.get("review") if isinstance(item.get("review"), Mapping) else {}
+        queue = item.get("queue") if isinstance(item.get("queue"), Mapping) else {}
+        print(
+            f"- {item.get('project_name', 'unknown')} "
+            f"[{item.get('status', 'active')}, {item.get('storage', 'local')}] "
+            f"review={review.get('total', 0)} queue={queue.get('backlog', 0)}"
+        )
+        print(f"  id: {item.get('project_id', '')}")
+        print(f"  path: {item.get('project_dir', '')}")
+        print(f"  state: {item.get('state_root', '')}")
 
 
 def uninstall_command(args: argparse.Namespace) -> None:
@@ -1049,7 +1073,7 @@ def uninstall_managed_config(config_path: Path, *, begin_marker: str, end_marker
 
 def purge_global_state_files() -> list[Path]:
     removed: list[Path] = []
-    for path in [soul_home() / "projects.json", soul_home() / "daemon_status.json"]:
+    for path in [soul_home() / "projects.json", soul_home() / "daemon_status.json", review_index_path()]:
         try:
             if path.exists() and path.is_file():
                 path.unlink()
@@ -1625,6 +1649,12 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_run.add_argument("--interval-seconds", type=float, default=300.0)
     daemon_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
     daemon_run.set_defaults(func=daemon_run_command)
+
+    projects_parser = subparsers.add_parser("projects", help="Inspect globally registered Soul projects.")
+    projects_subparsers = projects_parser.add_subparsers(dest="projects_command", required=True)
+    projects_list = projects_subparsers.add_parser("list", help="List projects known to Soul.")
+    projects_list.add_argument("--json", action="store_true")
+    projects_list.set_defaults(func=projects_list_command)
 
     traex_parser = subparsers.add_parser("traex", help="TraeX project integration helpers.")
     traex_subparsers = traex_parser.add_subparsers(dest="traex_command", required=True)

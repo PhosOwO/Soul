@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from soul.services.project_resolver import register_project, resolve_project_dir
+from soul.services.project_resolver import register_auto_project, state_owner_dir_from_record
 from soul.services.integrations.sessions import resolve_session_id
 
 
@@ -25,13 +25,16 @@ class HookResult:
 
 
 def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
-    project_dir = project_dir_from_payload(payload)
+    resolved = hook_state_owner_from_payload(payload)
+    if resolved is None:
+        return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
+    project_dir, project_record = resolved
     prompt = extract_prompt(payload)
 
     try:
         from soul.api import SoulApi, build_agent_injection
 
-        state = SoulApi(project_dir).get_state(task=prompt, limit=8)
+        state = SoulApi(project_dir, register=False).get_state(task=prompt, limit=8)
         state_artifact = project_dir / ".soul" / "state" / "STATE.md"
         heartbeat = append_hook_run(
             project_dir,
@@ -41,6 +44,8 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
                 "host": host,
                 "injected": True,
                 "state_artifact": ".soul/state/STATE.md" if state_artifact.exists() else None,
+                "source_project_dir": project_record.get("project_dir"),
+                "project_id": project_record.get("project_id"),
             },
             default_event="UserPromptSubmit",
         )
@@ -62,6 +67,8 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
                 "host": host,
                 "injected": False,
                 "error": compact_error(exc),
+                "source_project_dir": project_record.get("project_dir"),
+                "project_id": project_record.get("project_id"),
             },
             default_event="UserPromptSubmit",
         )
@@ -79,27 +86,16 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
 
 
 def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
-    project_dir = project_dir_from_payload(payload)
     prompt = extract_prompt(payload)
     outcome = extract_outcome(payload)
-    session_id = resolve_session_id(host=host, project_dir=project_dir, payloads=[payload])
-
     if not (prompt or outcome):
-        heartbeat = append_hook_run(
-            project_dir,
-            payload,
-            {
-                "status": "success",
-                "host": host,
-                "session_id": session_id,
-                "queued": False,
-                "reason": "empty_prompt_and_outcome",
-            },
-            default_event="Stop",
-        )
-        output = {"suppressOutput": True}
-        add_heartbeat_diagnostic(output, heartbeat)
-        return HookResult(output=output, project_dir=project_dir, heartbeat=heartbeat)
+        return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
+
+    resolved = hook_state_owner_from_payload(payload)
+    if resolved is None:
+        return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
+    project_dir, project_record = resolved
+    session_id = resolve_session_id(host=host, project_dir=project_dir, payloads=[payload])
 
     from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 
@@ -138,6 +134,8 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
                 "session_id": session_id,
                 "queued": False,
                 "error": compact_error(exc),
+                "source_project_dir": project_record.get("project_dir"),
+                "project_id": project_record.get("project_id"),
             },
             default_event="Stop",
         )
@@ -153,7 +151,10 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
             heartbeat=heartbeat,
         )
 
-    background_drain_started = start_queue_drain(project_dir)
+    background_drain_started = start_queue_drain(
+        project_dir,
+        source_project_dir=Path(str(project_record.get("project_dir") or project_dir)).expanduser().resolve(),
+    )
     heartbeat = append_hook_run(
         project_dir,
         payload,
@@ -164,6 +165,8 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
             "queued": True,
             "job_id": job.get("job_id"),
             "background_drain_started": background_drain_started,
+            "source_project_dir": project_record.get("project_dir"),
+            "project_id": project_record.get("project_id"),
         },
         default_event="Stop",
     )
@@ -188,13 +191,18 @@ def write_json(payload: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def project_dir_from_payload(payload: dict[str, Any]) -> Path:
-    project_dir = resolve_project_dir(
+def payload_cwd(payload: dict[str, Any]) -> Path:
+    return Path(str(payload.get("project_dir") or payload.get("cwd") or Path.cwd())).expanduser().resolve()
+
+
+def hook_state_owner_from_payload(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    record = register_auto_project(
         str(payload["project_dir"]) if payload.get("project_dir") else None,
         cwd=str(payload["cwd"]) if payload.get("cwd") else None,
     )
-    register_project(project_dir)
-    return project_dir
+    if record is None:
+        return None
+    return state_owner_dir_from_record(record), record
 
 
 def extract_prompt(payload: dict[str, Any]) -> str:
@@ -281,11 +289,11 @@ def compact_error(exc: Exception) -> str:
     return str(exc).replace("\n", " ")[:500]
 
 
-def start_queue_drain(project_dir: Path) -> bool:
+def start_queue_drain(project_dir: Path, *, source_project_dir: Path | None = None) -> bool:
     if os.environ.get("SOUL_DISABLE_BACKGROUND_DRAIN") == "1":
         return False
     env = os.environ.copy()
-    package_path = find_soul_package_path(project_dir)
+    package_path = find_soul_package_path(source_project_dir or project_dir)
     if package_path is not None:
         python_path = env.get("PYTHONPATH")
         env["PYTHONPATH"] = str(package_path) if not python_path else str(package_path) + os.pathsep + python_path
@@ -311,7 +319,7 @@ def start_queue_drain(project_dir: Path) -> bool:
     else:
         kwargs["start_new_session"] = True
     try:
-        subprocess.Popen(command, cwd=str(project_dir), **kwargs)
+        subprocess.Popen(command, cwd=str(source_project_dir or project_dir), **kwargs)
         return True
     except OSError:
         return False

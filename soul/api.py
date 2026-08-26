@@ -55,9 +55,10 @@ DEFAULT_PORT = 8765
 
 
 class SoulApi:
-    def __init__(self, project_dir: Path | None = None) -> None:
+    def __init__(self, project_dir: Path | None = None, *, register: bool = True) -> None:
         self.project_dir = resolve_project_dir(project_dir)
-        register_project(self.project_dir)
+        if register:
+            register_project(self.project_dir)
 
     def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = HOST_HTTP_API) -> dict[str, Any]:
         state = load_state(self.project_dir, project_name=self.project_dir.name)
@@ -526,8 +527,8 @@ def optional_int(value: Any) -> int | None:
     return int(value)
 
 
-def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> None:
-    api = SoulApi(project_dir.resolve())
+def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, register: bool = True) -> None:
+    api = SoulApi(project_dir.resolve(), register=register)
     server = ThreadingHTTPServer((host, port), make_handler(api))
     print(f"Soul HTTP API listening on http://{host}:{port} for {project_dir.resolve()}")
     server.serve_forever()

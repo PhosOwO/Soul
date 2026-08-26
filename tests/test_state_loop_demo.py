@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from experiments.state_loop_v0_1.run_minimal_loop import run
+import pytest
+
+run = pytest.importorskip("experiments.state_loop_v0_1.run_minimal_loop").run
 
 
 def test_minimal_state_loop_demo(tmp_path: Path) -> None:

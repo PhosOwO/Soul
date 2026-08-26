@@ -106,7 +106,7 @@ def test_reme_start_service_uses_server_safe_args(tmp_path, monkeypatch):
 
 
 def test_reme_start_service_hides_window_on_windows(tmp_path, monkeypatch):
-    monkeypatch.setattr("soul.adapters.reme.os.name", "nt")
+    monkeypatch.setattr("soul.adapters.reme.is_windows", lambda: True)
     monkeypatch.setattr("soul.adapters.reme.shutil.which", lambda command: r"C:\Python\Scripts\reme.exe")
     python_dir = tmp_path / "python"
     python_dir.mkdir()
@@ -130,7 +130,7 @@ def test_reme_start_service_hides_window_on_windows(tmp_path, monkeypatch):
 
         return FakeProcess()
 
-    monkeypatch.setattr("soul.adapters.reme.subprocess.STARTUPINFO", FakeStartupInfo)
+    monkeypatch.setattr("soul.adapters.reme.subprocess.STARTUPINFO", FakeStartupInfo, raising=False)
     monkeypatch.setattr("soul.adapters.reme.subprocess.STARTF_USESHOWWINDOW", 1, raising=False)
     monkeypatch.setattr("soul.adapters.reme.subprocess.CREATE_NO_WINDOW", 0x08000000, raising=False)
     monkeypatch.setattr("soul.adapters.reme.subprocess.Popen", fake_popen)
