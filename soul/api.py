@@ -28,7 +28,8 @@ from soul.services.reme.reme_transition import propose_reme_transition as propos
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
-from soul.services.project_resolver import register_project, resolve_project_dir
+from soul.services.daemon import load_review_index, scan_registered_projects
+from soul.services.project_resolver import load_project_registry, register_project, resolve_project_dir, state_owner_dir_from_record
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, propose_patch
 from soul.services.state_core.review.actions import (
     accept_review_candidate,
@@ -281,11 +282,57 @@ class SoulApi:
         append_patch_status(proposal, PATCH_STATUS_APPLIED, self.project_dir, updated_by=confirmed_by)
         return {"state": next_state, "applied_patch": proposal}
 
-    def review_card(self, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
-        return build_review_card(self.project_dir, limit=limit, near_expiry_hours=near_expiry_hours)
+    def review_index(self, *, scan: bool = False, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
+        if scan:
+            return scan_registered_projects(limit=limit, near_expiry_hours=near_expiry_hours)
+        return load_review_index()
+
+    def project_review_target(self, project_id: str) -> tuple[Path, dict[str, Any]]:
+        registry = load_project_registry()
+        for record in registry.get("projects", []):
+            if isinstance(record, dict) and record.get("project_id") == project_id:
+                return state_owner_dir_from_record(record), record
+        raise ValueError(f"Unknown project_id: {project_id}")
+
+    def review_card(
+        self,
+        limit: int = 5,
+        near_expiry_hours: int = 4,
+        *,
+        project_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not project_id:
+            return build_review_card(self.project_dir, limit=limit, near_expiry_hours=near_expiry_hours)
+        project_dir, record = self.project_review_target(project_id)
+        source_project_dir = Path(str(record.get("project_dir") or project_dir)).expanduser().resolve()
+        card = build_review_card(
+            project_dir,
+            limit=limit,
+            near_expiry_hours=near_expiry_hours,
+            project_name=str(record.get("project_name") or source_project_dir.name),
+            source_project_dir=source_project_dir,
+        )
+        card["project_id"] = record.get("project_id")
+        card["state_root"] = record.get("state_root")
+        card["storage"] = record.get("storage")
+        return card
+
+    def refresh_review_index(self, *, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
+        return scan_registered_projects(limit=limit, near_expiry_hours=near_expiry_hours)
 
     def accept_review_candidate(self, candidate_id: str, confirmed_by: str = HOST_SOUL_HTTP_API) -> dict[str, Any]:
         return accept_review_candidate(self.project_dir, candidate_id, confirmed_by=confirmed_by)
+
+    def accept_project_review_candidate(
+        self,
+        project_id: str,
+        candidate_id: str,
+        confirmed_by: str = HOST_SOUL_HTTP_API,
+    ) -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = accept_review_candidate(project_dir, candidate_id, confirmed_by=confirmed_by)
+        self.refresh_review_index()
+        return result
 
     def reject_review_candidate(
         self,
@@ -296,17 +343,54 @@ class SoulApi:
     ) -> dict[str, Any]:
         return reject_review_candidate(self.project_dir, candidate_id, reason=reason, rejected_by=rejected_by)
 
+    def reject_project_review_candidate(
+        self,
+        project_id: str,
+        candidate_id: str,
+        *,
+        reason: str = "",
+        rejected_by: str = HOST_SOUL_HTTP_API,
+    ) -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = reject_review_candidate(project_dir, candidate_id, reason=reason, rejected_by=rejected_by)
+        self.refresh_review_index()
+        return result
+
     def edit_review_candidate(self, candidate_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return edit_review_candidate(self.project_dir, candidate_id, payload)
+
+    def edit_project_review_candidate(self, project_id: str, candidate_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = edit_review_candidate(project_dir, candidate_id, payload)
+        self.refresh_review_index()
+        return result
 
     def snooze_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
         return snooze_review_candidate(self.project_dir, candidate_id, hours=hours)
 
+    def snooze_project_review_candidate(self, project_id: str, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = snooze_review_candidate(project_dir, candidate_id, hours=hours)
+        self.refresh_review_index()
+        return result
+
     def expire_review_candidate(self, candidate_id: str, *, reason: str = "") -> dict[str, Any]:
         return expire_review_candidate(self.project_dir, candidate_id, reason=reason)
 
+    def expire_project_review_candidate(self, project_id: str, candidate_id: str, *, reason: str = "") -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = expire_review_candidate(project_dir, candidate_id, reason=reason)
+        self.refresh_review_index()
+        return result
+
     def extend_review_candidate(self, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
         return extend_review_candidate(self.project_dir, candidate_id, hours=hours)
+
+    def extend_project_review_candidate(self, project_id: str, candidate_id: str, *, hours: int = 24) -> dict[str, Any]:
+        project_dir, _record = self.project_review_target(project_id)
+        result = extend_review_candidate(project_dir, candidate_id, hours=hours)
+        self.refresh_review_index()
+        return result
 
 def build_agent_injection(context: str) -> str:
     return (
@@ -349,7 +433,21 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                 query = parse_qs(parsed.query)
                 limit = int_value(first_query_value(query, "limit", "5"), default=5)
                 near_expiry_hours = int_value(first_query_value(query, "near_expiry_hours", "4"), default=4)
-                self.write_json(api.review_card(limit=limit, near_expiry_hours=near_expiry_hours))
+                project_id = first_query_value(query, "project_id", "")
+                self.write_json(
+                    api.review_card(
+                        limit=limit,
+                        near_expiry_hours=near_expiry_hours,
+                        project_id=project_id or None,
+                    )
+                )
+                return
+            if parsed.path == "/review-index":
+                query = parse_qs(parsed.query)
+                limit = int_value(first_query_value(query, "limit", "5"), default=5)
+                near_expiry_hours = int_value(first_query_value(query, "near_expiry_hours", "4"), default=4)
+                scan = first_query_value(query, "scan", "").lower() in {"1", "true", "yes"}
+                self.write_json(api.review_index(scan=scan, limit=limit, near_expiry_hours=near_expiry_hours))
                 return
             if parsed.path == "/state":
                 query = parse_qs(parsed.query)
@@ -431,48 +529,106 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                     self.write_json(api.apply_patch(proposal_id, confirmed_by=confirmed_by))
                     return
                 if self.path == "/review/accept":
-                    self.write_json(
-                        api.accept_review_candidate(
-                            str(payload["candidate_id"]),
-                            confirmed_by=str(payload.get("confirmed_by", HOST_SOUL_HTTP_API)),
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(
+                            api.accept_project_review_candidate(
+                                project_id,
+                                str(payload["candidate_id"]),
+                                confirmed_by=str(payload.get("confirmed_by", HOST_SOUL_HTTP_API)),
+                            )
                         )
-                    )
+                    else:
+                        self.write_json(
+                            api.accept_review_candidate(
+                                str(payload["candidate_id"]),
+                                confirmed_by=str(payload.get("confirmed_by", HOST_SOUL_HTTP_API)),
+                            )
+                        )
                     return
                 if self.path == "/review/reject":
-                    self.write_json(
-                        api.reject_review_candidate(
-                            str(payload["candidate_id"]),
-                            reason=str(payload.get("reason") or ""),
-                            rejected_by=str(payload.get("rejected_by", HOST_SOUL_HTTP_API)),
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(
+                            api.reject_project_review_candidate(
+                                project_id,
+                                str(payload["candidate_id"]),
+                                reason=str(payload.get("reason") or ""),
+                                rejected_by=str(payload.get("rejected_by", HOST_SOUL_HTTP_API)),
+                            )
                         )
-                    )
+                    else:
+                        self.write_json(
+                            api.reject_review_candidate(
+                                str(payload["candidate_id"]),
+                                reason=str(payload.get("reason") or ""),
+                                rejected_by=str(payload.get("rejected_by", HOST_SOUL_HTTP_API)),
+                            )
+                        )
                     return
                 if self.path == "/review/edit":
-                    self.write_json(api.edit_review_candidate(str(payload["candidate_id"]), payload))
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(api.edit_project_review_candidate(project_id, str(payload["candidate_id"]), payload))
+                    else:
+                        self.write_json(api.edit_review_candidate(str(payload["candidate_id"]), payload))
                     return
                 if self.path == "/review/snooze":
-                    self.write_json(
-                        api.snooze_review_candidate(
-                            str(payload["candidate_id"]),
-                            hours=int_value(payload.get("hours"), default=24),
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(
+                            api.snooze_project_review_candidate(
+                                project_id,
+                                str(payload["candidate_id"]),
+                                hours=int_value(payload.get("hours"), default=24),
+                            )
                         )
-                    )
+                    else:
+                        self.write_json(
+                            api.snooze_review_candidate(
+                                str(payload["candidate_id"]),
+                                hours=int_value(payload.get("hours"), default=24),
+                            )
+                        )
                     return
                 if self.path == "/review/expire":
-                    self.write_json(
-                        api.expire_review_candidate(
-                            str(payload["candidate_id"]),
-                            reason=str(payload.get("reason") or ""),
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(
+                            api.expire_project_review_candidate(
+                                project_id,
+                                str(payload["candidate_id"]),
+                                reason=str(payload.get("reason") or ""),
+                            )
                         )
-                    )
+                    else:
+                        self.write_json(
+                            api.expire_review_candidate(
+                                str(payload["candidate_id"]),
+                                reason=str(payload.get("reason") or ""),
+                            )
+                        )
                     return
                 if self.path == "/review/extend":
-                    self.write_json(
-                        api.extend_review_candidate(
-                            str(payload["candidate_id"]),
-                            hours=int_value(payload.get("hours"), default=24),
+                    project_id = optional_project_id(payload)
+                    if project_id:
+                        self.write_json(
+                            api.extend_project_review_candidate(
+                                project_id,
+                                str(payload["candidate_id"]),
+                                hours=int_value(payload.get("hours"), default=24),
+                            )
                         )
-                    )
+                    else:
+                        self.write_json(
+                            api.extend_review_candidate(
+                                str(payload["candidate_id"]),
+                                hours=int_value(payload.get("hours"), default=24),
+                            )
+                        )
+                    return
+                if self.path == "/review-index/scan":
+                    self.write_json(api.refresh_review_index())
                     return
                 if self.path == "/shutdown":
                     self.write_json({"ok": True, "service": HOST_SOUL_HTTP_API, "shutdown": True})
@@ -525,6 +681,13 @@ def optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def optional_project_id(payload: dict[str, Any]) -> str | None:
+    value = payload.get("project_id")
+    if value in (None, ""):
+        return None
+    return str(value)
 
 
 def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, *, register: bool = True) -> None:

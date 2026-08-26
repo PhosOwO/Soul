@@ -5,11 +5,13 @@ from datetime import UTC, datetime
 from http.server import ThreadingHTTPServer
 from threading import Thread
 from urllib.request import urlopen
+from urllib.request import Request
 
 import pytest
 
 from soul.api import SoulApi, make_handler
 from soul.adapters.reme import ReMeJobResult
+from soul.services.project_resolver import project_id_for_path, register_project
 from soul.services.state_core.proposals import propose_patch
 from soul.services.state_core.state_store import append_patch_proposal, load_patch_proposals
 from soul.services.state import load_state
@@ -74,6 +76,97 @@ def test_soul_api_review_page_and_card_endpoint(tmp_path):
     assert "Soul Review" in review
     assert "Ready to Confirm" in review
     assert card["has_reviewable_content"] is False
+
+
+def test_soul_api_global_review_index_and_project_card(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "repo"
+    project.mkdir()
+    state = load_state(project, project_name="Repo")
+    proposal = propose_patch(
+        state,
+        {
+            "source": "test",
+            "summary": "Use uv for Python commands.",
+            "state_item": {
+                "id": "prefer-uv",
+                "kind": "active_constraint",
+                "statement": "Use uv for Python commands in this project.",
+            },
+        },
+    )
+    append_patch_proposal(proposal, project)
+    record = register_project(project, project_name="Repo")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        index = json.loads(urlopen(base + "/review-index?scan=1", timeout=5).read().decode("utf-8"))
+        card = json.loads(
+            urlopen(base + f"/review-card?project_id={record['project_id']}", timeout=5).read().decode("utf-8")
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert index["projects"][0]["project_id"] == record["project_id"]
+    assert index["projects"][0]["review"]["ready_to_confirm"] == 1
+    assert card["project_id"] == project_id_for_path(project)
+    assert card["project"] == "Repo"
+    assert card["project_dir"] == str(project.resolve())
+    assert card["counts"]["ready_to_confirm"] == 1
+
+
+def test_soul_api_global_review_action_routes_by_project_id(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "repo"
+    project.mkdir()
+    state = load_state(project, project_name="Repo")
+    proposal = propose_patch(
+        state,
+        {
+            "source": "test",
+            "summary": "Use pnpm for frontend commands.",
+            "state_item": {
+                "id": "prefer-pnpm",
+                "kind": "active_constraint",
+                "statement": "Use pnpm for frontend commands in this project.",
+            },
+        },
+    )
+    append_patch_proposal(proposal, project)
+    record = register_project(project, project_name="Repo")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        request = Request(
+            base + "/review/accept",
+            data=json.dumps(
+                {
+                    "project_id": record["project_id"],
+                    "candidate_id": f"patch:{proposal['id']}",
+                    "confirmed_by": "test",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        accepted = json.loads(urlopen(request, timeout=5).read().decode("utf-8"))
+        index = json.loads(urlopen(base + "/review-index", timeout=5).read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert accepted["result"]["state"]["version"] == 2
+    assert load_state(project)["version"] == 2
+    assert index["projects"][0]["review"]["total"] == 0
 
 
 def test_soul_api_review_accept_patch_applies_and_removes_candidate(tmp_path):

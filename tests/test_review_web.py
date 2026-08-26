@@ -10,9 +10,10 @@ from soul.commands.parser import build_parser
 from soul.services.state_core.state_store import load_state
 
 
-def test_top_level_review_opens_existing_review_server(tmp_path, capsys):
+def test_top_level_review_opens_existing_review_server(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
     load_state(tmp_path, project_name="Review Web Test")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path)))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -37,8 +38,9 @@ def test_top_level_review_opens_existing_review_server(tmp_path, capsys):
 
 
 def test_top_level_review_restart_stops_existing_server_and_starts_new_one(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
     load_state(tmp_path, project_name="Review Web Test")
-    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path)))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     calls = []

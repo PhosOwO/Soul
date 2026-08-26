@@ -33,7 +33,7 @@ def render_review_page() -> str:
       font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     main {
-      width: min(780px, calc(100vw - 28px));
+      width: min(1120px, calc(100vw - 28px));
       margin: 28px auto;
     }
     header {
@@ -56,6 +56,41 @@ def render_review_page() -> str:
       box-shadow: var(--shadow);
       border-radius: 8px;
       overflow: hidden;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+    .project-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 10px;
+    }
+    .project-item {
+      display: block;
+      width: 100%;
+      min-height: 48px;
+      text-align: left;
+      white-space: normal;
+    }
+    .project-item.active {
+      border-color: var(--focus);
+      box-shadow: inset 3px 0 0 var(--focus);
+    }
+    .project-name {
+      display: block;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+    .project-meta {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
     }
     .toolbar {
       display: flex;
@@ -212,6 +247,7 @@ def render_review_page() -> str:
     @media (max-width: 560px) {
       main { margin-top: 14px; }
       header, .toolbar, .candidate-top { flex-direction: column; align-items: stretch; }
+      .layout { grid-template-columns: 1fr; }
       .source { white-space: normal; }
       button { flex: 1 1 auto; }
     }
@@ -226,12 +262,21 @@ def render_review_page() -> str:
       </div>
       <button type="button" class="ghost" id="refresh">Refresh</button>
     </header>
-    <div class="panel" aria-live="polite">
-      <div class="toolbar">
-        <div class="counts" id="counts"></div>
-        <div class="subtle" id="generated"></div>
+    <div class="layout">
+      <aside class="panel" aria-label="Projects">
+        <div class="toolbar">
+          <strong>Projects</strong>
+          <span class="subtle" id="projectCount"></span>
+        </div>
+        <div class="project-list" id="projectList"></div>
+      </aside>
+      <div class="panel" aria-live="polite">
+        <div class="toolbar">
+          <div class="counts" id="counts"></div>
+          <div class="subtle" id="generated"></div>
+        </div>
+        <div id="content" class="empty">Loading review decisions...</div>
       </div>
-      <div id="content" class="empty">Loading review decisions...</div>
     </div>
   </main>
 
@@ -253,32 +298,114 @@ def render_review_page() -> str:
   </dialog>
 
   <script>
-    const state = { card: null, activeCandidate: null };
+    const state = { index: null, card: null, activeProjectId: "", activeCandidate: null };
     const content = document.getElementById("content");
     const counts = document.getElementById("counts");
     const project = document.getElementById("project");
     const generated = document.getElementById("generated");
+    const projectList = document.getElementById("projectList");
+    const projectCount = document.getElementById("projectCount");
     const dialog = document.getElementById("editDialog");
 
-    document.getElementById("refresh").addEventListener("click", loadCard);
+    document.getElementById("refresh").addEventListener("click", loadIndex);
     document.getElementById("cancelEdit").addEventListener("click", () => dialog.close());
     document.getElementById("editForm").addEventListener("submit", async event => {
       event.preventDefault();
       await postAction("/review/edit", {
+        project_id: state.activeProjectId,
         candidate_id: document.getElementById("editCandidateId").value,
         statement: document.getElementById("editStatement").value,
         reason: document.getElementById("editReason").value,
         scope: document.getElementById("editScope").value,
       });
       dialog.close();
-      await loadCard();
+      await reloadActiveProject();
     });
 
-    async function loadCard() {
+    async function loadIndex() {
+      content.className = "empty";
+      content.textContent = "Loading review decisions...";
+      projectList.replaceChildren();
+      counts.replaceChildren();
+      try {
+        const response = await fetch("/review-index?scan=1&limit=5");
+        if (!response.ok) throw new Error(await response.text());
+        state.index = await response.json();
+        renderProjectList(state.index);
+        const projects = activeProjects(state.index);
+        if (!projects.length) {
+          renderOverview(state.index);
+          return;
+        }
+        const preferred = projects.find(item => item.project_id === state.activeProjectId) || projects[0];
+        await selectProject(preferred.project_id);
+      } catch (error) {
+        content.className = "error";
+        content.textContent = String(error);
+      }
+    }
+
+    function activeProjects(index) {
+      return (index.projects || []).filter(item => item.available !== false && item.status !== "unavailable");
+    }
+
+    function renderProjectList(index) {
+      const projects = index.projects || [];
+      projectCount.textContent = `${projects.length}`;
+      if (!projects.length) {
+        projectList.replaceChildren(emptyLine("No registered projects"));
+        return;
+      }
+      const nodes = projects.map(item => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "project-item";
+        button.dataset.projectId = item.project_id || "";
+        if (item.project_id === state.activeProjectId) button.classList.add("active");
+        const name = document.createElement("span");
+        name.className = "project-name";
+        name.textContent = item.project_name || "Unknown project";
+        const meta = document.createElement("span");
+        meta.className = "project-meta";
+        const review = item.review || {};
+        const queue = item.queue || {};
+        meta.textContent = `${item.status || "active"} · review ${review.total || 0} · queue ${queue.backlog || 0}`;
+        button.append(name, meta);
+        button.addEventListener("click", () => selectProject(item.project_id));
+        return button;
+      });
+      projectList.replaceChildren(...nodes);
+    }
+
+    function renderOverview(index) {
+      state.activeProjectId = "";
+      project.textContent = "Global Review Inbox";
+      generated.textContent = index.generated_at ? formatGeneratedAt(index.generated_at) : "";
+      counts.replaceChildren(pill(`${(index.projects || []).length} projects`));
+      content.className = "empty";
+      content.replaceChildren(
+        emptyLine("No registered projects with review decisions"),
+        emptyLine("Soul will list git projects after agent hooks record evidence."),
+      );
+    }
+
+    async function selectProject(projectId) {
+      if (!projectId) return;
+      state.activeProjectId = projectId;
+      renderProjectList(state.index || { projects: [] });
+      await loadCard(projectId);
+    }
+
+    async function reloadActiveProject() {
+      await loadIndex();
+      if (state.activeProjectId) await loadCard(state.activeProjectId);
+    }
+
+    async function loadCard(projectId) {
       content.className = "empty";
       content.textContent = "Loading review decisions...";
       try {
-        const response = await fetch("/review-card?limit=5");
+        const response = await fetch(`/review-card?limit=5&project_id=${encodeURIComponent(projectId)}`);
         if (!response.ok) throw new Error(await response.text());
         state.card = await response.json();
         renderCard(state.card);
@@ -421,32 +548,32 @@ def render_review_page() -> str:
     }
 
     async function accept(candidate) {
-      await postAction("/review/accept", { candidate_id: candidate.id });
-      await loadCard();
+      await postAction("/review/accept", { project_id: state.activeProjectId, candidate_id: candidate.id });
+      await reloadActiveProject();
     }
 
     async function reject(candidate) {
       const reason = window.prompt("Reason for rejection", "");
       if (reason === null) return;
-      await postAction("/review/reject", { candidate_id: candidate.id, reason });
-      await loadCard();
+      await postAction("/review/reject", { project_id: state.activeProjectId, candidate_id: candidate.id, reason });
+      await reloadActiveProject();
     }
 
     async function snooze(candidate) {
-      await postAction("/review/snooze", { candidate_id: candidate.id, hours: 24 });
-      await loadCard();
+      await postAction("/review/snooze", { project_id: state.activeProjectId, candidate_id: candidate.id, hours: 24 });
+      await reloadActiveProject();
     }
 
     async function extend(candidate) {
-      await postAction("/review/extend", { candidate_id: candidate.id, hours: 24 });
-      await loadCard();
+      await postAction("/review/extend", { project_id: state.activeProjectId, candidate_id: candidate.id, hours: 24 });
+      await reloadActiveProject();
     }
 
     async function expire(candidate) {
       const reason = window.prompt("Reason for expiry", "");
       if (reason === null) return;
-      await postAction("/review/expire", { candidate_id: candidate.id, reason });
-      await loadCard();
+      await postAction("/review/expire", { project_id: state.activeProjectId, candidate_id: candidate.id, reason });
+      await reloadActiveProject();
     }
 
     function openEdit(candidate) {
@@ -471,7 +598,7 @@ def render_review_page() -> str:
       return response.json();
     }
 
-    loadCard();
+    loadIndex();
   </script>
 </body>
 </html>

@@ -29,9 +29,11 @@ def build_review_card(
     limit: int = 5,
     near_expiry_hours: int = 4,
     now: datetime | None = None,
+    project_name: str | None = None,
+    source_project_dir: Path | None = None,
 ) -> dict[str, Any]:
     project = project_dir or Path.cwd()
-    state = load_state(project, project_name=project.name)
+    state = load_state(project, project_name=project_name or project.name)
     current_time = now or datetime.now(UTC)
     candidates = review_candidates(project, near_expiry_hours=near_expiry_hours, now=current_time)
     candidates.sort(key=candidate_sort_key, reverse=True)
@@ -40,8 +42,8 @@ def build_review_card(
     needs_review = [candidate for candidate in selected if candidate["bucket"] == "needs_review"]
     return {
         "schema_version": 1,
-        "project": state.get("project", project.name),
-        "project_dir": str(project),
+        "project": state.get("project", project_name or project.name),
+        "project_dir": str(source_project_dir or project),
         "generated_at": utc_now(),
         "limit": limit,
         "has_reviewable_content": bool(selected),

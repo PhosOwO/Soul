@@ -189,7 +189,8 @@ def scan_registered_projects(*, limit: int = 5, near_expiry_hours: int = 4) -> d
         "project_count": len(results),
         "projects": results,
     }
-    update_project_registry_records(updated_records)
+    if updated_records or projects_registry_path().exists():
+        update_project_registry_records(updated_records)
     write_review_index(status)
     write_daemon_status(status)
     return status

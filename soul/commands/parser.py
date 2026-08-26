@@ -367,6 +367,7 @@ def review_web_command(args: argparse.Namespace) -> None:
         if not args.review_no_open:
             webbrowser.open(review_url)
         return
+    scan_registered_projects()
     print(f"Starting Soul Review for {project_dir.resolve()}: {review_url}")
     if not args.review_no_open:
         threading.Timer(0.8, lambda: webbrowser.open(review_url)).start()
