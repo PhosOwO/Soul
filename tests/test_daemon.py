@@ -11,9 +11,11 @@ from pathlib import Path
 from soul.services.integrations.queue import enqueue_turn_evidence
 from soul.services.project_resolver import register_project
 from soul.services.daemon import (
+    next_working_lifecycle_boundary,
     notification_candidates,
     notification_state_path,
     notify_review_index,
+    review_index_in_default_inbox,
     scan_registered_projects,
     send_desktop_notification,
     should_scan_project_record,
@@ -107,6 +109,7 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     assert payload["projects"][0]["lifecycle"]["review_due"] == 2
     assert payload["projects"][0]["lifecycle"]["expired_unresolved"] == 1
     assert payload["projects"][0]["queue"]["backlog"] == 1
+    assert payload["projects"][0]["in_default_inbox"] is True
     assert not (soul_home / "daemon_status.json").exists()
     assert (soul_home / "review_index.json").is_file()
     review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
@@ -176,6 +179,20 @@ def test_daemon_scan_records_next_lifecycle_boundary(tmp_path, monkeypatch):
     assert registry["projects"][0]["next_lifecycle_scan_at"] == review_after
 
 
+def test_lifecycle_boundary_uses_near_expiry_before_expiry():
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+    boundary = next_working_lifecycle_boundary(
+        {
+            "review_after": "2026-08-26T20:00:00Z",
+            "expires_at": "2026-08-26T18:00:00Z",
+        },
+        now=now,
+        near_expiry_hours=4,
+    )
+
+    assert boundary == "2026-08-26T14:00:00Z"
+
+
 def test_daemon_due_only_scan_skips_projects_before_lifecycle_boundary(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
@@ -238,10 +255,35 @@ def test_daemon_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
 
     assert payload["projects"][0]["available"] is False
     assert payload["projects"][0]["status"] == "unavailable"
+    assert payload["projects"][0]["in_default_inbox"] is False
     assert payload["projects"][0]["error"] == "project directory does not exist"
     registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
     assert registry["projects"][0]["status"] == "unavailable"
     assert registry["projects"][0]["unavailable_since"]
+
+
+def test_default_inbox_hides_long_unavailable_projects():
+    now = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
+    recent_unavailable = {
+        "status": "unavailable",
+        "available": False,
+        "last_reviewable_at": "2026-08-20T12:00:00Z",
+        "unavailable_since": "2026-08-25T12:00:00Z",
+        "review": {"total": 0},
+        "queue": {"backlog": 0},
+    }
+    stale_unavailable = {
+        **recent_unavailable,
+        "unavailable_since": "2026-07-01T12:00:00Z",
+    }
+    never_reviewable = {
+        **recent_unavailable,
+        "last_reviewable_at": None,
+    }
+
+    assert review_index_in_default_inbox(recent_unavailable, now=now) is True
+    assert review_index_in_default_inbox(stale_unavailable, now=now) is False
+    assert review_index_in_default_inbox(never_reviewable, now=now) is False
 
 
 def review_index_payload(*, review_total: int = 1, needs_review: int = 1, ready_to_confirm: int = 0) -> dict[str, object]:

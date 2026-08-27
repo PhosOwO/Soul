@@ -43,6 +43,7 @@ NOTIFICATION_STATE_NAME = "notification_state.json"
 PROJECT_NOTIFICATION_COOLDOWN_MINUTES = 120
 GLOBAL_NOTIFICATION_COOLDOWN_MINUTES = 15
 QUEUE_BACKLOG_NOTIFICATION_AFTER_MINUTES = 30
+UNAVAILABLE_DEFAULT_INBOX_DAYS = 30
 
 
 def mapping_or_empty(value: Any) -> dict[str, Any]:
@@ -216,6 +217,27 @@ def empty_queue_summary() -> dict[str, int]:
     return {"queued": 0, "started": 0, "failed_retryable": 0, "blocked": 0, "dead_letter": 0, "backlog": 0}
 
 
+def review_index_in_default_inbox(project: dict[str, Any], *, now: datetime | None = None, unavailable_days: int = UNAVAILABLE_DEFAULT_INBOX_DAYS) -> bool:
+    status = str(project.get("status") or "active")
+    if status == "archived":
+        return False
+    review = mapping_or_empty(project.get("review"))
+    queue = mapping_or_empty(project.get("queue"))
+    if status != "unavailable" and project.get("available") is not False:
+        return int(review.get("total") or 0) > 0 or int(queue.get("backlog") or 0) > 0
+    if not project.get("last_reviewable_at"):
+        return False
+    unavailable_since = parse_utc_time(project.get("unavailable_since"))
+    if unavailable_since is None:
+        return True
+    current_time = now or datetime.now(UTC)
+    return current_time - unavailable_since < timedelta(days=max(unavailable_days, 0))
+
+
+def with_default_inbox_flag(project: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    return {**project, "in_default_inbox": review_index_in_default_inbox(project, now=now)}
+
+
 def oldest_queue_backlog_at(state_owner_dir: Path) -> str | None:
     state = replay_queue_state(state_owner_dir)
     completed_keys = {
@@ -263,6 +285,8 @@ def scan_project_record(
         "state_root": record.get("state_root"),
         "reme_root": record.get("reme_root"),
         "traces_root": record.get("traces_root"),
+        "last_reviewable_at": record.get("last_reviewable_at"),
+        "unavailable_since": record.get("unavailable_since"),
         "storage": record.get("storage"),
     }
     if not raw_project_dir or not project_dir.exists():
@@ -274,6 +298,7 @@ def scan_project_record(
             "review": empty_review_summary(),
             "queue": empty_queue_summary(),
         }
+        result = with_default_inbox_flag(result, now=parse_utc_time(now))
         return result, {
             **record,
             "status": "unavailable",
@@ -292,6 +317,7 @@ def scan_project_record(
             "review": empty_review_summary(),
             "queue": empty_queue_summary(),
         }
+        result = with_default_inbox_flag(result, now=parse_utc_time(now))
         return result, {
             **record,
             "status": "unavailable",
@@ -343,6 +369,7 @@ def scan_project_record(
             "review": review,
             "queue": queue_summary,
         }
+        result = with_default_inbox_flag(result, now=scan_time)
         return result, {
             **record,
             "project_name": result["project_name"],
@@ -364,6 +391,7 @@ def scan_project_record(
             "review": empty_review_summary(),
             "queue": empty_queue_summary(),
         }
+        result = with_default_inbox_flag(result, now=parse_utc_time(now))
         return result, {
             **record,
             "status": "unavailable",
@@ -390,7 +418,7 @@ def scan_registered_projects(
         if not isinstance(item, dict):
             continue
         if due_only and not should_scan_project_record(item, now=current_time):
-            normalized = project_result_from_registry_record(item)
+            normalized = with_default_inbox_flag(project_result_from_registry_record(item), now=current_time)
             normalized["scan_skipped"] = True
             results.append(normalized)
             updated_records.append(item)
@@ -433,6 +461,8 @@ def project_result_from_registry_record(record: dict[str, Any]) -> dict[str, Any
         "state_root": record.get("state_root"),
         "reme_root": record.get("reme_root"),
         "traces_root": record.get("traces_root"),
+        "last_reviewable_at": record.get("last_reviewable_at"),
+        "unavailable_since": record.get("unavailable_since"),
         "storage": record.get("storage"),
         "available": record.get("status") != "unavailable",
         "status": record.get("status") or "active",

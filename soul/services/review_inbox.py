@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from soul.services.daemon import load_review_index, refresh_registered_project, scan_registered_projects
+from soul.services.daemon import load_review_index, refresh_registered_project, review_index_in_default_inbox, scan_registered_projects
 from soul.services.project_resolver import load_project_registry, state_owner_dir_from_record
 from soul.services.state_core.review.actions import (
     accept_review_candidate,
@@ -54,11 +54,7 @@ class ReviewInboxService:
 
     @staticmethod
     def in_default_inbox(project: dict[str, Any]) -> bool:
-        if project.get("available") is False or project.get("status") in {"unavailable", "archived"}:
-            return False
-        review = project.get("review") if isinstance(project.get("review"), dict) else {}
-        queue = project.get("queue") if isinstance(project.get("queue"), dict) else {}
-        return int(review.get("total") or 0) > 0 or int(queue.get("backlog") or 0) > 0
+        return review_index_in_default_inbox(project)
 
     def review_card(self, project_id: str, *, limit: int = 5, near_expiry_hours: int = 4) -> dict[str, Any]:
         project_dir, record = self.project_review_target(project_id)
