@@ -29,6 +29,7 @@ from soul.services.daemon import (
 from soul.services.integrations.episodes import find_episode, read_episodes, resolve_episode_selector
 from soul.services.shared.constants import (
     HOST_DEEPSEEK_HARNESS,
+    HOST_SOUL_HTTP_API,
     PATCH_STATUS_ACCEPTED,
     PATCH_STATUS_APPLIED,
     PATCH_STATUS_PROPOSED,
@@ -358,7 +359,7 @@ def review_web_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.review_project_dir)
     base_url = f"http://{args.review_host}:{args.review_port}"
     review_url = base_url + "/review"
-    health = check_http_health(base_url)
+    health = check_review_http_health(base_url)
     if args.review_restart and health == "ok":
         print(f"Restarting Soul Review at {review_url}")
         shutdown_status = shutdown_http_api(base_url)
@@ -372,7 +373,7 @@ def review_web_command(args: argparse.Namespace) -> None:
                 "Existing Soul Review server did not stop in time. "
                 "Stop it manually, then run `soul --review` again."
             )
-        health = check_http_health(base_url)
+        health = check_review_http_health(base_url)
     if health == "ok":
         print(f"Soul Review is available: {review_url}")
         print("Use --review-restart to restart the local Review server.")
@@ -1579,6 +1580,20 @@ def check_http_health(api_url: str) -> str:
         with urlopen(url, timeout=2) as response:
             return "ok" if response.status == 200 else f"http {response.status}"
     except (OSError, URLError) as exc:
+        return f"not reachable: {str(exc).splitlines()[0]}"
+
+
+def check_review_http_health(api_url: str) -> str:
+    url = api_url.rstrip("/") + "/health"
+    try:
+        with urlopen(url, timeout=2) as response:
+            if response.status != 200:
+                return f"http {response.status}"
+            payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict) and payload.get("service") == HOST_SOUL_HTTP_API and payload.get("review_service") is True:
+                return "ok"
+            return "not review service"
+    except (OSError, URLError, json.JSONDecodeError) as exc:
         return f"not reachable: {str(exc).splitlines()[0]}"
 
 

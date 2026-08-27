@@ -337,7 +337,10 @@ def render_review_page() -> str:
           renderOverview(state.index);
           return;
         }
-        const preferred = projects.find(item => item.project_id === state.activeProjectId) || projects[0];
+        const preferred =
+          projects.find(item => item.project_id === state.activeProjectId) ||
+          projects.find(item => item.project_id === state.index.preferred_project_id) ||
+          projects[0];
         await selectProject(preferred.project_id);
       } catch (error) {
         content.className = "error";
@@ -346,11 +349,11 @@ def render_review_page() -> str:
     }
 
     function activeProjects(index) {
-      return (index.projects || []).filter(item => item.available !== false && item.status !== "unavailable");
+      return (index.projects || []).filter(item => item.in_default_inbox === true);
     }
 
     function renderProjectList(index) {
-      const projects = index.projects || [];
+      const projects = activeProjects(index);
       projectCount.textContent = `${projects.length}`;
       if (!projects.length) {
         projectList.replaceChildren(emptyLine("No registered projects"));

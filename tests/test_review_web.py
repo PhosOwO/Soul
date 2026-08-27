@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from threading import Thread
 
@@ -81,13 +83,13 @@ def test_top_level_review_does_not_register_current_directory(tmp_path, monkeypa
     plain_dir.mkdir()
     calls = []
 
-    def fake_health(base_url):
+    def fake_review_health(base_url):
         return "down"
 
     def fake_serve(project_dir, *, host, port, register=True):
         calls.append({"project_dir": project_dir, "host": host, "port": port, "register": register})
 
-    monkeypatch.setattr(parser_module, "check_http_health", fake_health)
+    monkeypatch.setattr(parser_module, "check_review_http_health", fake_review_health)
     monkeypatch.setattr(soul.api, "serve", fake_serve)
 
     parser = build_parser()
@@ -104,3 +106,53 @@ def test_top_level_review_does_not_register_current_directory(tmp_path, monkeypa
     assert calls == [{"project_dir": plain_dir, "host": "127.0.0.1", "port": 8765, "register": False}]
     assert not (plain_dir / ".soul").exists()
     assert not (soul_home / "projects.json").exists()
+
+
+def test_top_level_review_does_not_reuse_non_review_health_server(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
+    calls = []
+
+    class OldApiHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/health":
+                body = json.dumps({"ok": True, "service": "soul-http-api"}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, format: str, *args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), OldApiHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    def fake_serve(project_dir, *, host, port, register=True):
+        calls.append({"project_dir": project_dir, "host": host, "port": port, "register": register})
+
+    monkeypatch.setattr(soul.api, "serve", fake_serve)
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--review",
+            "--review-project-dir",
+            str(tmp_path),
+            "--review-port",
+            str(server.server_address[1]),
+            "--review-no-open",
+        ]
+    )
+
+    try:
+        args.func(args)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert calls == [{"project_dir": tmp_path, "host": "127.0.0.1", "port": server.server_address[1], "register": False}]
+    assert "Starting Soul Review" in capsys.readouterr().out

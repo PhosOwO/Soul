@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 from http.server import ThreadingHTTPServer
 from threading import Thread
+from urllib.error import HTTPError
 from urllib.request import urlopen
 from urllib.request import Request
 
@@ -60,7 +61,8 @@ def test_soul_api_get_state_includes_unconfirmed_working_state(tmp_path):
     assert "SST-first Qnet/STR" in payload["injection"]
 
 
-def test_soul_api_review_page_and_card_endpoint(tmp_path):
+def test_soul_api_review_page_and_card_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOUL_HOME", str(tmp_path / "soul-home"))
     load_state(tmp_path, project_name="Demo")
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path)))
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -68,13 +70,17 @@ def test_soul_api_review_page_and_card_endpoint(tmp_path):
     try:
         base = f"http://127.0.0.1:{server.server_address[1]}"
         review = urlopen(base + "/review", timeout=5).read().decode("utf-8")
-        card = json.loads(urlopen(base + "/review-card", timeout=5).read().decode("utf-8"))
+        health = json.loads(urlopen(base + "/health", timeout=5).read().decode("utf-8"))
+        card = json.loads(
+            urlopen(base + f"/review-card?project_id={project_id_for_path(tmp_path)}", timeout=5).read().decode("utf-8")
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
     assert "Soul Review" in review
     assert "Ready to Confirm" in review
+    assert health["review_service"] is True
     assert card["has_reviewable_content"] is False
 
 
@@ -83,7 +89,10 @@ def test_soul_api_global_review_index_and_project_card(tmp_path, monkeypatch):
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     project = tmp_path / "repo"
     project.mkdir()
+    idle_project = tmp_path / "idle"
+    idle_project.mkdir()
     state = load_state(project, project_name="Repo")
+    load_state(idle_project, project_name="Idle")
     proposal = propose_patch(
         state,
         {
@@ -98,6 +107,7 @@ def test_soul_api_global_review_index_and_project_card(tmp_path, monkeypatch):
     )
     append_patch_proposal(proposal, project)
     record = register_project(project, project_name="Repo")
+    idle_record = register_project(idle_project, project_name="Idle")
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -112,12 +122,48 @@ def test_soul_api_global_review_index_and_project_card(tmp_path, monkeypatch):
         server.shutdown()
         thread.join(timeout=5)
 
-    assert index["projects"][0]["project_id"] == record["project_id"]
-    assert index["projects"][0]["review"]["ready_to_confirm"] == 1
+    projects = {item["project_id"]: item for item in index["projects"]}
+    assert index["preferred_project_id"] == record["project_id"]
+    assert projects[record["project_id"]]["in_default_inbox"] is True
+    assert projects[idle_record["project_id"]]["in_default_inbox"] is False
+    assert projects[record["project_id"]]["review"]["ready_to_confirm"] == 1
     assert card["project_id"] == project_id_for_path(project)
     assert card["project"] == "Repo"
     assert card["project_dir"] == str(project.resolve())
     assert card["counts"]["ready_to_confirm"] == 1
+
+
+def test_soul_api_review_index_prefers_matching_project_dir(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_state = load_state(first, project_name="First")
+    second_state = load_state(second, project_name="Second")
+    for project, state, item_id in [
+        (first, first_state, "first-rule"),
+        (second, second_state, "second-rule"),
+    ]:
+        proposal = propose_patch(
+            state,
+            {
+                "source": "test",
+                "summary": f"{item_id} summary",
+                "state_item": {
+                    "id": item_id,
+                    "kind": "active_constraint",
+                    "statement": f"{item_id} statement.",
+                },
+            },
+        )
+        append_patch_proposal(proposal, project)
+        register_project(project, project_name=project.name.title())
+
+    index = SoulApi(second, register=False).review_index(scan=True)
+
+    assert index["preferred_project_id"] == project_id_for_path(second)
 
 
 def test_soul_api_global_review_action_routes_by_project_id(tmp_path, monkeypatch):
@@ -167,6 +213,49 @@ def test_soul_api_global_review_action_routes_by_project_id(tmp_path, monkeypatc
     assert accepted["result"]["state"]["version"] == 2
     assert load_state(project)["version"] == 2
     assert index["projects"][0]["review"]["total"] == 0
+
+
+def test_soul_api_global_review_action_requires_project_id(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "repo"
+    project.mkdir()
+    state = load_state(project, project_name="Repo")
+    proposal = propose_patch(
+        state,
+        {
+            "source": "test",
+            "summary": "Require project id for global review actions.",
+            "state_item": {
+                "id": "require-project-id",
+                "kind": "active_constraint",
+                "statement": "Global review actions require project_id.",
+            },
+        },
+    )
+    append_patch_proposal(proposal, project)
+    register_project(project, project_name="Repo")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(SoulApi(tmp_path, register=False)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        request = Request(
+            base + "/review/accept",
+            data=json.dumps({"candidate_id": f"patch:{proposal['id']}"}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(HTTPError) as exc:
+            urlopen(request, timeout=5)
+        error = json.loads(exc.value.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert exc.value.code == 400
+    assert error["error"] == "project_id_required"
 
 
 def test_soul_api_review_accept_patch_applies_and_removes_candidate(tmp_path):
