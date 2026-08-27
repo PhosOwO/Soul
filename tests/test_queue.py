@@ -6,6 +6,7 @@ import json
 
 from soul.services.integrations.queue import (
     EVENT_BLOCKED,
+    EVENT_DEAD_LETTER,
     EVENT_FAILED,
     append_queue_event,
     drain_queue,
@@ -15,6 +16,7 @@ from soul.services.integrations.queue import (
     select_runnable_jobs,
 )
 from soul.services.project_resolver import register_project
+from soul.services.state_core.state_store import load_state
 
 
 def test_queue_selects_fifo_over_runnable_jobs(tmp_path):
@@ -122,6 +124,33 @@ def test_queue_drain_processes_turn_evidence_through_reme(tmp_path, monkeypatch)
     review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
     assert review_index["projects"][0]["project_name"] == "Queue Project"
     assert review_index["projects"][0]["queue"]["backlog"] == 0
+
+
+def test_queue_drain_refreshes_review_index_after_dead_letter(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    load_state(tmp_path, project_name="Queue Project")
+    register_project(tmp_path, project_name="Queue Project")
+    enqueue_turn_evidence(
+        tmp_path,
+        source="codex:mcp",
+        session_id="s1",
+        turn_id="t1",
+        payload={"task": "", "outcome": ""},
+    )
+
+    from soul.services.daemon import refresh_registered_project_for_state_owner
+
+    before = refresh_registered_project_for_state_owner(tmp_path)
+    result = drain_queue(tmp_path, limit=1)
+
+    assert before is not None
+    assert before["queue"]["backlog"] == 1
+    assert result["locked"] is False
+    assert result["processed"][0]["status"] == EVENT_DEAD_LETTER
+    review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
+    assert review_index["projects"][0]["queue"]["backlog"] == 0
+    assert review_index["projects"][0]["queue"]["dead_letter"] == 1
 
 
 def test_queue_jsonl_append_is_safe_for_concurrent_hooks(tmp_path):

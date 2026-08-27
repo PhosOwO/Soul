@@ -215,6 +215,53 @@ def test_soul_api_global_review_action_routes_by_project_id(tmp_path, monkeypatc
     assert index["projects"][0]["review"]["total"] == 0
 
 
+def test_soul_api_global_review_action_merges_single_project_index(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_state = load_state(first, project_name="First")
+    second_state = load_state(second, project_name="Second")
+    proposals = {}
+    for project, state, item_id in [
+        (first, first_state, "first-rule"),
+        (second, second_state, "second-rule"),
+    ]:
+        proposal = propose_patch(
+            state,
+            {
+                "source": "test",
+                "summary": f"{item_id} summary",
+                "state_item": {
+                    "id": item_id,
+                    "kind": "active_constraint",
+                    "statement": f"{item_id} statement.",
+                },
+            },
+        )
+        proposals[project] = proposal
+        append_patch_proposal(proposal, project)
+        register_project(project, project_name=project.name.title())
+
+    api = SoulApi(first, register=False)
+    initial = api.review_index(scan=True)
+    accepted = api.accept_project_review_candidate(
+        project_id_for_path(second),
+        f"patch:{proposals[second]['id']}",
+        confirmed_by="test",
+    )
+    index = api.review_index(scan=False)
+    projects = {item["project_id"]: item for item in index["projects"]}
+
+    assert accepted["result"]["state"]["version"] == 2
+    assert len(initial["projects"]) == 2
+    assert len(index["projects"]) == 2
+    assert projects[project_id_for_path(first)]["review"]["total"] == 1
+    assert projects[project_id_for_path(second)]["review"]["total"] == 0
+
+
 def test_soul_api_global_review_action_requires_project_id(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))

@@ -127,6 +127,8 @@ def drain_queue(project_dir: Path, *, limit: int = 3) -> dict[str, Any]:
         for selection in select_runnable_jobs(state, now=datetime.now(UTC), limit=limit):
             result = process_queue_job(project_dir, selection)
             processed.append(result)
+    if processed:
+        refresh_review_index_for_project(project_dir)
     return {"processed": processed, "locked": False}
 
 
@@ -205,7 +207,6 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             memory_mode=result.get("memory_mode"),
             reme_write_mode=result.get("reme_write_mode"),
         )
-        refresh_review_index_for_project(project_dir)
         return {"job_id": job_id, "status": EVENT_COMPLETED, "working_state_id": working_state_id}
     except Exception as exc:
         retryable = is_retryable_error(exc)
