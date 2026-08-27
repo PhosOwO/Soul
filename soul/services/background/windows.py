@@ -37,7 +37,7 @@ def write_daemon_script(*, interval_seconds: float) -> Path:
         'set "PYTHONDONTWRITEBYTECODE=1"',
         f'if not exist "{logs_dir}" mkdir "{logs_dir}"',
         (
-            f'"{sys.executable}" -m soul.cli daemon run --interval-seconds {interval_seconds} '
+            f'"{sys.executable}" -m soul.cli scan run --interval-seconds {interval_seconds} '
             f'>> "{logs_dir / "daemon.log"}" 2>> "{logs_dir / "daemon.err.log"}"'
         ),
         "",

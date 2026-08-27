@@ -162,7 +162,7 @@ def test_daemon_scan_records_next_lifecycle_boundary(tmp_path, monkeypatch):
     register_project(project, project_name="Project")
 
     completed = subprocess.run(
-        [sys.executable, "-m", "soul.cli", "daemon", "scan", "--json"],
+        [sys.executable, "-m", "soul.cli", "scan", "--json"],
         cwd=ROOT,
         env=cli_env(soul_home),
         text=True,
@@ -227,7 +227,7 @@ def test_daemon_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
     register_project(missing_project, project_name="Missing")
 
     completed = subprocess.run(
-        [sys.executable, "-m", "soul.cli", "daemon", "scan", "--json"],
+        [sys.executable, "-m", "soul.cli", "scan", "--json"],
         cwd=ROOT,
         env=cli_env(soul_home),
         text=True,
@@ -376,7 +376,7 @@ def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch
     write_review_index(review_index_payload())
 
     completed = subprocess.run(
-        [sys.executable, "-m", "soul.cli", "daemon", "notify", "--dry-run", "--json"],
+        [sys.executable, "-m", "soul.cli", "scan", "notify", "--dry-run", "--json"],
         cwd=ROOT,
         env=cli_env(soul_home),
         text=True,
@@ -436,7 +436,7 @@ def test_macos_launch_agent_plist_runs_daemon_loop(tmp_path, monkeypatch):
     plist = build_macos_launch_agent_plist(interval_seconds=123)
 
     assert plist["Label"] == "com.soulkit.daemon"
-    assert plist["ProgramArguments"][:5] == [sys.executable, "-m", "soul.cli", "daemon", "run"]
+    assert plist["ProgramArguments"][:5] == [sys.executable, "-m", "soul.cli", "scan", "run"]
     assert plist["ProgramArguments"][-1] == "123"
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
@@ -508,7 +508,59 @@ def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
     assert result["launchctl"]["stdout"] == "running"
 
 
-def test_daemon_install_cli_no_load_json(tmp_path):
+def test_daemon_command_is_not_supported(tmp_path):
+    soul_home = tmp_path / "soul-home"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "daemon", "status"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "invalid choice" in completed.stderr
+
+
+def test_windows_background_install_no_load_is_structured(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    result = WindowsBackgroundService().install(interval_seconds=77, load=False)
+
+    assert result["ok"] is True
+    assert result["platform"] == "win32"
+    assert result["task_name"] == "SoulKitDaemon"
+    assert result["loaded"] is False
+    assert Path(str(result["script_path"])).is_file()
+    assert "soul.cli scan run" in Path(str(result["script_path"])).read_text(encoding="utf-8")
+
+
+def test_scan_run_once_cli_refreshes_review_index(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "project"
+    project.mkdir()
+    load_state(project, project_name="Scan Run")
+    register_project(project, project_name="Scan Run")
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "scan", "run", "--once"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert completed.stdout == ""
+    review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
+    assert review_index["projects"][0]["project_name"] == "Scan Run"
+
+
+def test_service_install_cli_no_load_json_uses_background_adapter(tmp_path):
     soul_home = tmp_path / "soul-home"
     home = tmp_path / "home"
 
@@ -517,7 +569,7 @@ def test_daemon_install_cli_no_load_json(tmp_path):
             sys.executable,
             "-m",
             "soul.cli",
-            "daemon",
+            "service",
             "install",
             "--no-load",
             "--interval-seconds",
@@ -537,21 +589,24 @@ def test_daemon_install_cli_no_load_json(tmp_path):
     if payload["platform"] == "darwin":
         assert Path(payload["plist_path"]).is_file()
         plist = plistlib.loads(Path(payload["plist_path"]).read_bytes())
-        assert plist["ProgramArguments"][-1] == "77.0"
+        assert plist["ProgramArguments"][:5] == [sys.executable, "-m", "soul.cli", "scan", "run"]
     else:
         assert payload["platform"] == sys.platform
         assert payload["capability"] == "background_service"
 
 
-def test_windows_background_install_no_load_is_structured(tmp_path, monkeypatch):
+def test_service_status_cli_json_is_structured(tmp_path):
     soul_home = tmp_path / "soul-home"
-    monkeypatch.setenv("SOUL_HOME", str(soul_home))
 
-    result = WindowsBackgroundService().install(interval_seconds=77, load=False)
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "service", "status", "--json"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
 
-    assert result["ok"] is True
-    assert result["platform"] == "win32"
-    assert result["task_name"] == "SoulKitDaemon"
-    assert result["loaded"] is False
-    assert Path(str(result["script_path"])).is_file()
-    assert "soul.cli daemon run" in Path(str(result["script_path"])).read_text(encoding="utf-8")
+    assert payload["platform"] == sys.platform
+    assert payload["capability"] == "background_service"

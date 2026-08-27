@@ -50,7 +50,7 @@ def build_macos_launch_agent_plist(*, interval_seconds: float = DEFAULT_BACKGROU
             sys.executable,
             "-m",
             "soul.cli",
-            "daemon",
+            "scan",
             "run",
             "--interval-seconds",
             str(interval_seconds),

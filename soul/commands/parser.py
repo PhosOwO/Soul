@@ -593,6 +593,54 @@ def daemon_run_command(args: argparse.Namespace) -> None:
     daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
 
 
+def service_install_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().install(interval_seconds=args.interval_seconds, load=not args.no_load)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_service_install_result(result))
+
+
+def service_start_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().start()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_service_lifecycle_result("Started", result))
+
+
+def service_stop_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().stop()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_service_lifecycle_result("Stopped", result))
+
+
+def service_restart_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().restart()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_service_lifecycle_result("Restarted", result))
+
+
+def service_uninstall_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().uninstall()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_service_uninstall_result(result))
+
+
+def service_status_command(args: argparse.Namespace) -> None:
+    result = background_service_for_platform().status()
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    print(format_daemon_background_status(result).replace("Soul Background Service", "Soul Service"))
+
+
 def daemon_install_command(args: argparse.Namespace) -> None:
     result = background_service_for_platform().install(interval_seconds=args.interval_seconds, load=not args.no_load)
     if args.json:
@@ -1434,6 +1482,12 @@ def format_daemon_install_result(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def format_service_install_result(result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul service install is unsupported on {result.get('platform', 'unknown')}."
+    return format_daemon_install_result(result).replace("Soul daemon", "Soul service")
+
+
 def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
         return f"Soul daemon uninstall is unsupported on {result.get('platform', 'unknown')}."
@@ -1447,6 +1501,12 @@ def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
             f"- removed: {bool(result.get('removed', False))}",
         ]
     )
+
+
+def format_service_uninstall_result(result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul service uninstall is unsupported on {result.get('platform', 'unknown')}."
+    return format_daemon_uninstall_result(result).replace("Soul daemon", "Soul service")
 
 
 def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
@@ -1464,6 +1524,12 @@ def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> st
         if result.get(key):
             lines.append(f"- {key}: {result.get(key)}")
     return "\n".join(lines)
+
+
+def format_service_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
+    if result.get("unsupported"):
+        return f"Soul service {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
+    return format_daemon_lifecycle_result(action, result).replace("Soul daemon", "Soul service")
 
 
 def format_projects_prune_result(result: Mapping[str, Any]) -> str:
@@ -1857,45 +1923,40 @@ def build_parser() -> argparse.ArgumentParser:
     scan_status = scan_subparsers.add_parser("status", help="Show the latest Review Index scan result.")
     scan_status.add_argument("--json", action="store_true")
     scan_status.set_defaults(func=daemon_status_command)
+    scan_run = scan_subparsers.add_parser("run", help="Run the scan loop in the foreground.")
+    scan_run.add_argument("--interval-seconds", type=float, default=300.0)
+    scan_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
+    scan_run.set_defaults(func=daemon_run_command)
+    scan_notify = scan_subparsers.add_parser("notify", help="Send a desktop reminder for reviewable projects.")
+    scan_notify.add_argument("--dry-run", action="store_true", help="Evaluate notification candidates without sending.")
+    scan_notify.add_argument("--json", action="store_true", help="Print machine-readable notification result.")
+    scan_notify.add_argument("--scan", action="store_true", help="Refresh the global review index before notifying.")
+    scan_notify.add_argument("--limit", type=int, default=5)
+    scan_notify.add_argument("--near-expiry-hours", type=int, default=4)
+    scan_notify.set_defaults(func=daemon_notify_command)
 
-    daemon_parser = subparsers.add_parser("daemon", help="Run or inspect the global Soul daemon.")
-    daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
-    daemon_scan = daemon_subparsers.add_parser("scan", help="Scan registered projects for review and queue work.")
-    daemon_scan.add_argument("--limit", type=int, default=5)
-    daemon_scan.add_argument("--near-expiry-hours", type=int, default=4)
-    daemon_scan.add_argument("--json", action="store_true")
-    daemon_scan.set_defaults(func=daemon_scan_command)
-    daemon_status = daemon_subparsers.add_parser("status", help="Show the latest daemon scan result.")
-    daemon_status.add_argument("--json", action="store_true")
-    daemon_status.set_defaults(func=daemon_status_command)
-    daemon_run = daemon_subparsers.add_parser("run", help="Run the daemon scan loop in the foreground.")
-    daemon_run.add_argument("--interval-seconds", type=float, default=300.0)
-    daemon_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
-    daemon_run.set_defaults(func=daemon_run_command)
-    daemon_install = daemon_subparsers.add_parser("install", help="Install the user-level macOS background daemon.")
-    daemon_install.add_argument("--interval-seconds", type=float, default=900.0)
-    daemon_install.add_argument("--no-load", action="store_true", help="Write the launchd plist without loading it.")
-    daemon_install.add_argument("--json", action="store_true")
-    daemon_install.set_defaults(func=daemon_install_command)
-    daemon_start = daemon_subparsers.add_parser("start", help="Load the installed user-level macOS daemon.")
-    daemon_start.add_argument("--json", action="store_true")
-    daemon_start.set_defaults(func=daemon_start_command)
-    daemon_stop = daemon_subparsers.add_parser("stop", help="Unload the installed user-level macOS daemon.")
-    daemon_stop.add_argument("--json", action="store_true")
-    daemon_stop.set_defaults(func=daemon_stop_command)
-    daemon_restart = daemon_subparsers.add_parser("restart", help="Reload the installed user-level macOS daemon.")
-    daemon_restart.add_argument("--json", action="store_true")
-    daemon_restart.set_defaults(func=daemon_restart_command)
-    daemon_uninstall = daemon_subparsers.add_parser("uninstall", help="Unload and remove the user-level macOS daemon.")
-    daemon_uninstall.add_argument("--json", action="store_true")
-    daemon_uninstall.set_defaults(func=daemon_uninstall_command)
-    daemon_notify = daemon_subparsers.add_parser("notify", help="Send a desktop reminder for reviewable projects.")
-    daemon_notify.add_argument("--dry-run", action="store_true", help="Evaluate notification candidates without sending.")
-    daemon_notify.add_argument("--json", action="store_true", help="Print machine-readable notification result.")
-    daemon_notify.add_argument("--scan", action="store_true", help="Refresh the global review index before notifying.")
-    daemon_notify.add_argument("--limit", type=int, default=5)
-    daemon_notify.add_argument("--near-expiry-hours", type=int, default=4)
-    daemon_notify.set_defaults(func=daemon_notify_command)
+    service_parser = subparsers.add_parser("service", help="Manage the user-level Soul scan background service.")
+    service_subparsers = service_parser.add_subparsers(dest="service_command", required=True)
+    service_install = service_subparsers.add_parser("install", help="Install the user-level background scan service.")
+    service_install.add_argument("--interval-seconds", type=float, default=900.0)
+    service_install.add_argument("--no-load", action="store_true", help="Install without starting/loading it.")
+    service_install.add_argument("--json", action="store_true")
+    service_install.set_defaults(func=service_install_command)
+    service_start = service_subparsers.add_parser("start", help="Start the installed user-level background scan service.")
+    service_start.add_argument("--json", action="store_true")
+    service_start.set_defaults(func=service_start_command)
+    service_stop = service_subparsers.add_parser("stop", help="Stop the installed user-level background scan service.")
+    service_stop.add_argument("--json", action="store_true")
+    service_stop.set_defaults(func=service_stop_command)
+    service_restart = service_subparsers.add_parser("restart", help="Restart the installed user-level background scan service.")
+    service_restart.add_argument("--json", action="store_true")
+    service_restart.set_defaults(func=service_restart_command)
+    service_uninstall = service_subparsers.add_parser("uninstall", help="Uninstall the user-level background scan service.")
+    service_uninstall.add_argument("--json", action="store_true")
+    service_uninstall.set_defaults(func=service_uninstall_command)
+    service_status = service_subparsers.add_parser("status", help="Show background scan service status.")
+    service_status.add_argument("--json", action="store_true")
+    service_status.set_defaults(func=service_status_command)
 
     projects_parser = subparsers.add_parser("projects", help="Inspect globally registered Soul projects.")
     projects_subparsers = projects_parser.add_subparsers(dest="projects_command", required=True)
