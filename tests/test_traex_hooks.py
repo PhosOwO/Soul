@@ -9,7 +9,7 @@ from shutil import copytree
 from typing import Any
 
 from soul.hooks.runtime import append_hook_run, run_stop_hook
-from soul.services.project_resolver import global_project_dir, project_id_for_path
+from soul.services.project_resolver import project_id_for_path
 from soul.services.state import load_state
 
 
@@ -751,7 +751,7 @@ def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path)
 
     output = json.loads(completed.stdout)
     assert "Soul queued evidence job" in output["systemMessage"]
-    state_owner = soul_home / "projects" / project_id_for_path(project)
+    state_owner = project
     hook_runs = (state_owner / ".soul" / "state" / "hook_runs.jsonl").read_text(encoding="utf-8").splitlines()
     heartbeat = json.loads(hook_runs[-1])
     assert heartbeat["host"] == "codex"
@@ -764,7 +764,37 @@ def test_generic_hook_cli_records_evidence_without_trae_template(tmp_path: Path)
     review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
     assert review_index["projects"][0]["project_id"] == project_id_for_path(project)
     assert review_index["projects"][0]["queue"]["backlog"] == 1
+    registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
+    assert registry["projects"][0]["state_path"] == str(project.resolve() / ".soul" / "state" / "state.json")
+    assert (project / ".soul").exists()
+
+
+def test_user_prompt_submit_does_not_initialize_git_project(tmp_path: Path) -> None:
+    project = tmp_path / "consumer"
+    project.mkdir()
+    (project / ".git").mkdir()
+    soul_home = tmp_path / "soul-home"
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "hook", "user-prompt-submit", "--host", "codex"],
+        cwd=ROOT,
+        input=json.dumps(
+            {
+                "cwd": str(project),
+                "prompt": "Read existing Soul state only",
+                "session_id": "read-only-hook-session",
+                "hook_event_name": "UserPromptSubmit",
+            }
+        ),
+        env={**cli_env(), "SOUL_HOME": str(soul_home), "SOUL_DISABLE_BACKGROUND_DRAIN": "1"},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert json.loads(completed.stdout) == {"suppressOutput": True}
     assert not (project / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
 
 
 def test_generic_hook_skips_non_git_directory_without_creating_soul(tmp_path: Path) -> None:
@@ -848,7 +878,7 @@ def test_stop_hook_uses_thread_name_as_stable_session_fallback(tmp_path: Path, m
         host="traex",
     )
 
-    state_owner = global_project_dir(project_id_for_path(project))
+    state_owner = project
     jobs = (state_owner / ".soul" / "state" / "queue" / "jobs.jsonl").read_text(encoding="utf-8").splitlines()
     job = json.loads(jobs[-1])
 

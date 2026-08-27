@@ -9,7 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from soul.services.project_resolver import register_auto_project, state_owner_dir_from_record
+from soul.services.project_resolver import (
+    find_git_root,
+    find_soul_project_root,
+    project_id_for_path,
+    register_project,
+    state_owner_dir_from_record,
+)
 from soul.services.integrations.sessions import resolve_session_id
 
 
@@ -25,7 +31,7 @@ class HookResult:
 
 
 def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
-    resolved = hook_state_owner_from_payload(payload)
+    resolved = hook_existing_state_owner_from_payload(payload)
     if resolved is None:
         return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
     project_dir, project_record = resolved
@@ -91,10 +97,15 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
     if not (prompt or outcome):
         return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
 
-    resolved = hook_state_owner_from_payload(payload)
-    if resolved is None:
+    resolved_project = hook_project_for_write_from_payload(payload)
+    if resolved_project is None:
         return HookResult(output={"suppressOutput": True}, project_dir=payload_cwd(payload), heartbeat={})
-    project_dir, project_record = resolved
+    project_dir = resolved_project
+    project_record: dict[str, Any] = {
+        "project_id": project_id_for_path(project_dir),
+        "project_dir": str(project_dir),
+        "project_name": project_dir.name,
+    }
     session_id = resolve_session_id(host=host, project_dir=project_dir, payloads=[payload])
 
     from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
@@ -123,6 +134,16 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
                     ),
                 },
             },
+        )
+        from soul.services.state_core.state_store import load_state
+
+        load_state(project_dir, project_name=project_dir.name)
+        project_record = register_project(
+            project_dir,
+            project_name=project_dir.name,
+            storage="local",
+            state_owner_dir=project_dir,
+            project_id=project_id_for_path(project_dir),
         )
         refresh_review_index(project_record)
     except Exception as exc:
@@ -196,14 +217,24 @@ def payload_cwd(payload: dict[str, Any]) -> Path:
     return Path(str(payload.get("project_dir") or payload.get("cwd") or Path.cwd())).expanduser().resolve()
 
 
-def hook_state_owner_from_payload(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]] | None:
-    record = register_auto_project(
-        str(payload["project_dir"]) if payload.get("project_dir") else None,
-        cwd=str(payload["cwd"]) if payload.get("cwd") else None,
-    )
-    if record is None:
+def hook_existing_state_owner_from_payload(payload: dict[str, Any]) -> tuple[Path, dict[str, Any]] | None:
+    project_dir = find_soul_project_root(payload_cwd(payload))
+    if project_dir is None:
         return None
+    project_id = project_id_for_path(project_dir)
+    record = {
+        "project_id": project_id,
+        "project_dir": str(project_dir),
+        "project_name": project_dir.name,
+        "state_root": str(project_dir / ".soul" / "state"),
+        "state_path": str(project_dir / ".soul" / "state" / "state.json"),
+        "storage": "local",
+    }
     return state_owner_dir_from_record(record), record
+
+
+def hook_project_for_write_from_payload(payload: dict[str, Any]) -> Path | None:
+    return find_git_root(payload_cwd(payload))
 
 
 def extract_prompt(payload: dict[str, Any]) -> str:

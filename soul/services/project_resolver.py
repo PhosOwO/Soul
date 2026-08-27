@@ -46,6 +46,14 @@ def find_project_root(start: Path) -> Path | None:
     return None
 
 
+def find_soul_project_root(start: Path) -> Path | None:
+    current = start if start.is_dir() else start.parent
+    for candidate in [current, *current.parents]:
+        if is_soul_project(candidate):
+            return candidate
+    return None
+
+
 def find_git_root(start: Path) -> Path | None:
     current = start if start.is_dir() else start.parent
     for candidate in [current, *current.parents]:
@@ -180,19 +188,11 @@ def register_auto_project(raw_project_dir: str | Path | None = None, *, cwd: str
     if git_root is None:
         return None
     project_id = project_id_for_path(git_root)
-    if is_soul_project(git_root):
-        return register_project(
-            git_root,
-            project_name=git_root.name,
-            storage=STORAGE_LOCAL,
-            state_owner_dir=git_root,
-            project_id=project_id,
-        )
     return register_project(
         git_root,
         project_name=git_root.name,
-        storage=STORAGE_GLOBAL,
-        state_owner_dir=global_project_dir(project_id),
+        storage=STORAGE_LOCAL,
+        state_owner_dir=git_root,
         project_id=project_id,
     )
 
