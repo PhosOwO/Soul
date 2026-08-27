@@ -534,6 +534,7 @@ def notify_review_index(
         "generated_at": current_iso,
         "dry_run": dry_run,
         "would_notify": bool(candidates),
+        "reason": "notification_candidates" if candidates else notification_skip_reason(current_index, state, now=current_time),
         "notifications": candidates,
         "delivery": {"attempted": False, "delivered": False, "platform": platform_name or sys.platform},
     }
@@ -552,7 +553,15 @@ def notify_review_index(
             }
         if candidates:
             title, body = format_notification_message(candidates)
-            delivery = send_desktop_notification(title, body, platform_name=platform_name)
+            try:
+                delivery = send_desktop_notification(title, body, platform_name=platform_name)
+            except Exception as exc:
+                delivery = {
+                    "attempted": True,
+                    "delivered": False,
+                    "platform": platform_name or sys.platform,
+                    "error": str(exc).replace("\n", " ")[:500],
+                }
             result["delivery"] = delivery
             if delivery.get("delivered") or delivery.get("skipped"):
                 state["last_notified_at"] = current_iso
@@ -573,6 +582,27 @@ def notify_review_index(
         state["last_result"] = result
         write_notification_state(state)
     return result
+
+
+def notification_skip_reason(index: dict[str, Any], state: dict[str, Any], *, now: datetime) -> str:
+    last_global = parse_utc_time(state.get("last_notified_at"))
+    if last_global and now - last_global < timedelta(minutes=GLOBAL_NOTIFICATION_COOLDOWN_MINUTES):
+        return "global_cooldown"
+    projects_state = mapping_or_empty(state.get("projects"))
+    has_attention = False
+    for project in index.get("projects", []):
+        if not isinstance(project, dict) or project.get("available") is False:
+            continue
+        counts = notification_counts(project)
+        if counts["review_total"] <= 0 and not queue_backlog_old_enough(project, now=now):
+            continue
+        has_attention = True
+        project_id = str(project.get("project_id") or "")
+        previous = mapping_or_empty(projects_state.get(project_id))
+        last_project = parse_utc_time(previous.get("last_notified_at"))
+        if previous.get("last_signature") == notification_signature(counts) and last_project:
+            return "project_signature_unchanged"
+    return "no_new_notification_changes" if has_attention else "no_reviewable_notification_candidates"
 
 
 def notification_candidates(
@@ -649,15 +679,14 @@ def notification_reason(
     previous_needs = int(previous_counts.get("needs_review") or 0)
     previous_ready = int(previous_counts.get("ready_to_confirm") or 0)
     previous_total = int(previous_counts.get("review_total") or 0)
+    previous_queue = int(previous_counts.get("queue_backlog") or 0)
     if counts["needs_review"] > previous_needs:
         return "needs_review_increased"
     if counts["ready_to_confirm"] > previous_ready:
         return "ready_to_confirm_increased"
     if previous_total == 0 and counts["review_total"] > 0:
         return "review_items_available"
-    if counts["review_total"] > 0:
-        return "review_items_still_pending"
-    if queue_old_enough and counts["queue_backlog"] > 0:
+    if queue_old_enough and counts["queue_backlog"] > previous_queue:
         return "queue_backlog_stale"
     return None
 

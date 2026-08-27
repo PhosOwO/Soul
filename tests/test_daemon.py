@@ -279,6 +279,7 @@ def test_daemon_notify_dry_run_reports_candidates_without_writing_state(tmp_path
     )
 
     assert result["would_notify"] is True
+    assert result["reason"] == "notification_candidates"
     assert result["notifications"][0]["reason"] == "needs_review_increased"
     assert result["delivery"]["attempted"] is False
     assert not notification_state_path().exists()
@@ -322,6 +323,81 @@ def test_daemon_notify_does_not_repeat_same_signature_inside_cooldown(tmp_path, 
     assert len(deliveries) == 1
     state = json.loads(notification_state_path().read_text(encoding="utf-8"))
     assert state["projects"]["project-1"]["last_signature"] == "needs=1;ready=0;backlog=0"
+
+
+def test_daemon_notify_does_not_repeat_same_signature_after_cooldown(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    deliveries = []
+
+    def fake_send(title, body, *, platform_name=None):
+        deliveries.append((title, body, platform_name))
+        return {"attempted": True, "delivered": True, "platform": platform_name or "darwin"}
+
+    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fake_send)
+    index = review_index_payload(review_total=3, needs_review=3)
+
+    first = notify_review_index(index, now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC), platform_name="darwin")
+    second = notify_review_index(index, now=datetime(2026, 8, 26, 15, 0, tzinfo=UTC), platform_name="darwin")
+
+    assert first["would_notify"] is True
+    assert second["would_notify"] is False
+    assert second["reason"] == "project_signature_unchanged"
+    assert len(deliveries) == 1
+
+
+def test_queue_backlog_does_not_repeat_when_unchanged_after_notification(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    deliveries = []
+    index = {
+        "schema_version": 1,
+        "projects": [
+            {
+                "project_id": "project-1",
+                "project_name": "Project",
+                "available": True,
+                "review": {"total": 0, "needs_review": 0, "ready_to_confirm": 0},
+                "queue": {"backlog": 1, "oldest_backlog_at": "2026-08-26T11:20:00Z"},
+            }
+        ],
+    }
+
+    def fake_send(title, body, *, platform_name=None):
+        deliveries.append((title, body, platform_name))
+        return {"attempted": True, "delivered": True, "platform": platform_name or "darwin"}
+
+    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fake_send)
+
+    first = notify_review_index(index, now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC), platform_name="darwin")
+    second = notify_review_index(index, now=datetime(2026, 8, 26, 15, 0, tzinfo=UTC), platform_name="darwin")
+
+    assert first["notifications"][0]["reason"] == "queue_backlog_stale"
+    assert second["would_notify"] is False
+    assert second["reason"] == "project_signature_unchanged"
+    assert len(deliveries) == 1
+
+
+def test_notify_captures_desktop_delivery_exception(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    def fail_send(title, body, *, platform_name=None):
+        raise RuntimeError("notification transport failed")
+
+    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fail_send)
+
+    result = notify_review_index(
+        review_index_payload(),
+        now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+        platform_name="darwin",
+    )
+
+    assert result["would_notify"] is True
+    assert result["delivery"]["attempted"] is True
+    assert result["delivery"]["delivered"] is False
+    assert result["delivery"]["error"] == "notification transport failed"
+    assert notification_state_path().exists()
 
 
 def test_non_macos_notification_is_skipped(tmp_path, monkeypatch):
@@ -368,6 +444,23 @@ def test_queue_backlog_candidate_requires_age_threshold():
     assert notification_candidates(fresh, {"projects": {}}, now=now) == []
     candidates = notification_candidates(stale, {"projects": {}}, now=now)
     assert candidates[0]["reason"] == "queue_backlog_stale"
+
+
+def test_notify_dry_run_without_candidates_reports_stable_reason(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    result = notify_review_index(
+        review_index_payload(review_total=0, needs_review=0),
+        dry_run=True,
+        now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+        platform_name="darwin",
+    )
+
+    assert result["would_notify"] is False
+    assert result["reason"] == "no_reviewable_notification_candidates"
+    assert result["notifications"] == []
+    assert result["delivery"]["attempted"] is False
 
 
 def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch):
