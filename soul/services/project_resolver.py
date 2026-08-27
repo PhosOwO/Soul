@@ -84,19 +84,27 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
     else:
         resolved_state_root = default_state_root(project_dir, storage=storage, project_id=project_id)
     now = utc_now()
+    lifecycle = record.get("lifecycle") if isinstance(record.get("lifecycle"), dict) else {}
+    next_lifecycle_scan_at = record.get("next_lifecycle_scan_at") or lifecycle.get("next_lifecycle_scan_at")
     return {
         "project_id": project_id,
+        "identity": record.get("identity")
+        if isinstance(record.get("identity"), dict)
+        else {"kind": "path_hash", "source": str(project_dir)},
         "project_dir": str(project_dir),
         "project_name": str(record.get("project_name") or project_dir.name),
         "state_root": str(resolved_state_root),
         "state_path": str(resolved_state_root / "state.json"),
+        "reme_root": str(project_dir / SOUL_DIR_NAME / "reme"),
+        "traces_root": str(project_dir / SOUL_DIR_NAME / "traces"),
         "storage": storage,
         "status": str(record.get("status") or "active"),
         "first_seen_at": str(record.get("first_seen_at") or record.get("last_seen_at") or now),
         "last_seen_at": str(record.get("last_seen_at") or now),
         "last_scanned_at": record.get("last_scanned_at"),
         "last_reviewable_at": record.get("last_reviewable_at"),
-        "next_lifecycle_scan_at": record.get("next_lifecycle_scan_at"),
+        "next_lifecycle_scan_at": next_lifecycle_scan_at,
+        "lifecycle": {**lifecycle, "next_lifecycle_scan_at": next_lifecycle_scan_at},
         "unavailable_since": record.get("unavailable_since"),
         "review": record.get("review") if isinstance(record.get("review"), dict) else {},
         "queue": record.get("queue") if isinstance(record.get("queue"), dict) else {},
@@ -153,16 +161,24 @@ def register_project(
     )
     record = {
         "project_id": resolved_project_id,
+        "identity": {"kind": "path_hash", "source": str(project)},
         "project_dir": str(project),
         "project_name": project_name or project.name,
         "state_root": str(state_root),
         "state_path": str(state_root / "state.json"),
+        "reme_root": str(project / SOUL_DIR_NAME / "reme"),
+        "traces_root": str(project / SOUL_DIR_NAME / "traces"),
         "storage": storage,
         "status": "active",
         "first_seen_at": (existing or {}).get("first_seen_at") or now,
         "last_seen_at": now,
         "last_scanned_at": (existing or {}).get("last_scanned_at"),
+        "last_reviewable_at": (existing or {}).get("last_reviewable_at"),
         "next_lifecycle_scan_at": (existing or {}).get("next_lifecycle_scan_at"),
+        "lifecycle": {
+            **((existing or {}).get("lifecycle") if isinstance((existing or {}).get("lifecycle"), dict) else {}),
+            "next_lifecycle_scan_at": (existing or {}).get("next_lifecycle_scan_at"),
+        },
         "unavailable_since": None,
     }
     if existing is None:

@@ -8,7 +8,7 @@ from pathlib import Path
 from shutil import copytree
 from typing import Any
 
-from soul.hooks.runtime import append_hook_run, run_stop_hook
+from soul.hooks.runtime import append_hook_run, read_payload, run_stop_hook
 from soul.services.project_resolver import project_id_for_path
 from soul.services.state import load_state
 
@@ -47,6 +47,16 @@ def cli_env() -> dict[str, str]:
     env["PYTHONPATH"] = str(ROOT)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
+
+
+def test_read_payload_accepts_utf8_bom_stdin(monkeypatch) -> None:
+    class FakeStdin:
+        def read(self) -> str:
+            return '\ufeff{"hook_event_name":"Stop"}'
+
+    monkeypatch.setattr(sys, "stdin", FakeStdin())
+
+    assert read_payload() == {"hook_event_name": "Stop"}
 
 
 def test_traex_install_copies_templates_and_initializes_project(tmp_path: Path) -> None:

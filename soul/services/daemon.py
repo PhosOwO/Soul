@@ -38,7 +38,6 @@ from soul.services.state_core.working_state import classify_working_item_lifecyc
 from soul.services.shared.state_types import WorkingStateItem
 
 
-DAEMON_STATUS_NAME = "daemon_status.json"
 REVIEW_INDEX_NAME = "review_index.json"
 NOTIFICATION_STATE_NAME = "notification_state.json"
 PROJECT_NOTIFICATION_COOLDOWN_MINUTES = 120
@@ -48,10 +47,6 @@ QUEUE_BACKLOG_NOTIFICATION_AFTER_MINUTES = 30
 
 def mapping_or_empty(value: Any) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
-
-
-def daemon_status_path() -> Path:
-    return projects_registry_path().with_name(DAEMON_STATUS_NAME)
 
 
 def review_index_path() -> Path:
@@ -262,9 +257,12 @@ def scan_project_record(
     state_owner_dir = state_owner_dir_from_record(record)
     base_project = {
         "project_id": record.get("project_id"),
+        "identity": record.get("identity"),
         "project_dir": str(project_dir),
         "project_name": record.get("project_name") or project_dir.name,
         "state_root": record.get("state_root"),
+        "reme_root": record.get("reme_root"),
+        "traces_root": record.get("traces_root"),
         "storage": record.get("storage"),
     }
     if not raw_project_dir or not project_dir.exists():
@@ -283,6 +281,7 @@ def scan_project_record(
             "unavailable_since": record.get("unavailable_since") or now,
             "review": result["review"],
             "queue": result["queue"],
+            "lifecycle": mapping_or_empty(record.get("lifecycle")),
         }
     if record.get("storage") != "global" and record.get("state_path") and not Path(str(record["state_path"])).exists():
         result = {
@@ -300,6 +299,7 @@ def scan_project_record(
             "unavailable_since": record.get("unavailable_since") or now,
             "review": result["review"],
             "queue": result["queue"],
+            "lifecycle": mapping_or_empty(record.get("lifecycle")),
         }
     try:
         project_name = str(record.get("project_name") or project_dir.name)
@@ -350,6 +350,7 @@ def scan_project_record(
             "last_scanned_at": now,
             "last_reviewable_at": now if review["total"] or queue_summary["backlog"] else record.get("last_reviewable_at"),
             "next_lifecycle_scan_at": lifecycle.get("next_lifecycle_scan_at"),
+            "lifecycle": lifecycle,
             "unavailable_since": None,
             "review": review,
             "queue": queue_summary,
@@ -370,6 +371,7 @@ def scan_project_record(
             "unavailable_since": record.get("unavailable_since") or now,
             "review": result["review"],
             "queue": result["queue"],
+            "lifecycle": mapping_or_empty(record.get("lifecycle")),
         }
 
 
@@ -405,7 +407,6 @@ def scan_registered_projects(
     if updated_records or projects_registry_path().exists():
         update_project_registry_records(updated_records)
     write_review_index(status)
-    write_daemon_status(status)
     return status
 
 
@@ -426,9 +427,12 @@ def project_result_from_registry_record(record: dict[str, Any]) -> dict[str, Any
     project_dir = Path(str(record.get("project_dir") or ".")).expanduser().resolve()
     return {
         "project_id": record.get("project_id"),
+        "identity": record.get("identity"),
         "project_dir": str(project_dir),
         "project_name": record.get("project_name") or project_dir.name,
         "state_root": record.get("state_root"),
+        "reme_root": record.get("reme_root"),
+        "traces_root": record.get("traces_root"),
         "storage": record.get("storage"),
         "available": record.get("status") != "unavailable",
         "status": record.get("status") or "active",
@@ -488,7 +492,6 @@ def merge_review_project(project: dict[str, Any], *, generated_at: str) -> dict[
         "projects": merged,
     }
     write_review_index(next_index)
-    write_daemon_status(next_index)
     return next_index
 
 
@@ -702,23 +705,6 @@ def parse_utc_time(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
-
-
-def load_daemon_status() -> dict[str, Any]:
-    path = daemon_status_path()
-    if not path.exists():
-        return {"schema_version": 1, "projects": []}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"schema_version": 1, "projects": []}
-    return data if isinstance(data, dict) else {"schema_version": 1, "projects": []}
-
-
-def write_daemon_status(status: dict[str, Any]) -> None:
-    path = daemon_status_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def load_review_index() -> dict[str, Any]:

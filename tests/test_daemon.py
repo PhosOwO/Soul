@@ -91,7 +91,7 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     register_project(project, project_name="Project")
 
     completed = subprocess.run(
-        [sys.executable, "-m", "soul.cli", "daemon", "scan", "--json"],
+        [sys.executable, "-m", "soul.cli", "scan", "--json"],
         cwd=ROOT,
         env=cli_env(soul_home),
         text=True,
@@ -107,17 +107,20 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     assert payload["projects"][0]["lifecycle"]["review_due"] == 2
     assert payload["projects"][0]["lifecycle"]["expired_unresolved"] == 1
     assert payload["projects"][0]["queue"]["backlog"] == 1
-    assert (soul_home / "daemon_status.json").is_file()
+    assert not (soul_home / "daemon_status.json").exists()
     assert (soul_home / "review_index.json").is_file()
     review_index = json.loads((soul_home / "review_index.json").read_text(encoding="utf-8"))
     assert review_index["projects"][0]["review"]["needs_review"] == 2
     registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
     assert registry["projects"][0]["status"] == "active"
+    assert registry["projects"][0]["identity"] == {"kind": "path_hash", "source": str(project.resolve())}
+    assert registry["projects"][0]["reme_root"] == str(project.resolve() / ".soul" / "reme")
+    assert registry["projects"][0]["traces_root"] == str(project.resolve() / ".soul" / "traces")
     assert registry["projects"][0]["last_scanned_at"]
     assert registry["projects"][0]["review"]["total"] == 2
 
     status = subprocess.run(
-        [sys.executable, "-m", "soul.cli", "daemon", "status"],
+        [sys.executable, "-m", "soul.cli", "scan", "status"],
         cwd=ROOT,
         env=cli_env(soul_home),
         text=True,
@@ -386,6 +389,44 @@ def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch
     assert payload["would_notify"] is True
     assert payload["notifications"][0]["project_id"] == "project-1"
     assert not (soul_home / "notification_state.json").exists()
+
+
+def test_daemon_status_cli_reads_review_index_not_legacy_status(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    write_review_index(review_index_payload(review_total=3, needs_review=2, ready_to_confirm=1))
+    (soul_home / "daemon_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "legacy",
+                "project_count": 1,
+                "projects": [
+                    {
+                        "project_id": "legacy",
+                        "project_name": "Legacy",
+                        "available": True,
+                        "review": {"total": 99, "needs_review": 99, "ready_to_confirm": 0},
+                        "queue": {"backlog": 0},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "soul.cli", "scan", "status", "--json"],
+        cwd=ROOT,
+        env=cli_env(soul_home),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
+
+    assert payload["projects"][0]["project_id"] == "project-1"
+    assert payload["projects"][0]["review"]["total"] == 3
 
 
 def test_macos_launch_agent_plist_runs_daemon_loop(tmp_path, monkeypatch):

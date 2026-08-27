@@ -201,7 +201,7 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
 
 
 def read_payload() -> dict[str, Any]:
-    raw = sys.stdin.read()
+    raw = sys.stdin.read().lstrip("\ufeff")
     if not raw.strip():
         return {}
     data = json.loads(raw)

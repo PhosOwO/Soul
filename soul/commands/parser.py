@@ -20,7 +20,6 @@ from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_p
 from soul.services.background.manager import background_service_for_platform
 from soul.services.daemon import (
     daemon_loop,
-    load_daemon_status,
     load_review_index,
     notification_state_path,
     notify_review_index,
@@ -578,7 +577,7 @@ def daemon_scan_command(args: argparse.Namespace) -> None:
 
 
 def daemon_status_command(args: argparse.Namespace) -> None:
-    status = load_daemon_status()
+    status = load_review_index()
     background = background_service_for_platform().status()
     if args.json:
         status = {**status, "background": background}
@@ -1643,7 +1642,7 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall_parser.add_argument(
         "--purge-global-state",
         action="store_true",
-        help="Remove $SOUL_HOME/projects.json and daemon_status.json. Project .soul directories are kept.",
+        help="Remove $SOUL_HOME registry, review index, notification state, and legacy daemon_status.json. Project .soul directories are kept.",
     )
     uninstall_parser.set_defaults(func=uninstall_command)
 
@@ -1833,6 +1832,16 @@ def build_parser() -> argparse.ArgumentParser:
     dsh_doctor.add_argument("--project-dir", default=".")
     dsh_doctor.add_argument("--api-url", default="http://127.0.0.1:8765")
     dsh_doctor.set_defaults(func=dsh_doctor_command)
+
+    scan_parser = subparsers.add_parser("scan", help="Scan registered projects into the global Review Index.")
+    scan_parser.add_argument("--limit", type=int, default=5)
+    scan_parser.add_argument("--near-expiry-hours", type=int, default=4)
+    scan_parser.add_argument("--json", action="store_true")
+    scan_parser.set_defaults(func=daemon_scan_command)
+    scan_subparsers = scan_parser.add_subparsers(dest="scan_command")
+    scan_status = scan_subparsers.add_parser("status", help="Show the latest Review Index scan result.")
+    scan_status.add_argument("--json", action="store_true")
+    scan_status.set_defaults(func=daemon_status_command)
 
     daemon_parser = subparsers.add_parser("daemon", help="Run or inspect the global Soul daemon.")
     daemon_subparsers = daemon_parser.add_subparsers(dest="daemon_command", required=True)
