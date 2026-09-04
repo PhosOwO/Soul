@@ -18,8 +18,8 @@ from soul import __version__
 from soul.adapters.reme import ReMeCliAdapter
 from soul.hooks.runtime import HookHost, read_payload, run_stop_hook, run_user_prompt_submit_hook, write_json
 from soul.services.background.manager import background_service_for_platform
-from soul.services.daemon import (
-    daemon_loop,
+from soul.services.scan_core import (
+    scan_loop,
     load_review_index,
     notification_state_path,
     notify_review_index,
@@ -569,28 +569,28 @@ def dsh_doctor_command(args: argparse.Namespace) -> None:
         print("- status: API availability is not enough; no DeepSeek Harness Soul execution heartbeat was found.")
 
 
-def daemon_scan_command(args: argparse.Namespace) -> None:
+def scan_command(args: argparse.Namespace) -> None:
     status = scan_registered_projects(limit=args.limit, near_expiry_hours=args.near_expiry_hours)
     if args.json:
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return
-    print(format_daemon_status(status))
+    print(format_scan_status(status))
 
 
-def daemon_status_command(args: argparse.Namespace) -> None:
+def scan_status_command(args: argparse.Namespace) -> None:
     status = load_review_index()
     background = background_service_for_platform().status()
     if args.json:
         status = {**status, "background": background}
         print(json.dumps(status, ensure_ascii=False, indent=2))
         return
-    print(format_daemon_status(status))
+    print(format_scan_status(status))
     print("")
-    print(format_daemon_background_status(background))
+    print(format_service_status(background))
 
 
-def daemon_run_command(args: argparse.Namespace) -> None:
-    daemon_loop(interval_seconds=args.interval_seconds, once=args.once)
+def scan_run_command(args: argparse.Namespace) -> None:
+    scan_loop(interval_seconds=args.interval_seconds, once=args.once)
 
 
 def service_install_command(args: argparse.Namespace) -> None:
@@ -638,50 +638,10 @@ def service_status_command(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
-    print(format_daemon_background_status(result).replace("Soul Background Service", "Soul Service"))
+    print(format_service_status(result))
 
 
-def daemon_install_command(args: argparse.Namespace) -> None:
-    result = background_service_for_platform().install(interval_seconds=args.interval_seconds, load=not args.no_load)
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(format_daemon_install_result(result))
-
-
-def daemon_start_command(args: argparse.Namespace) -> None:
-    result = background_service_for_platform().start()
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(format_daemon_lifecycle_result("Started", result))
-
-
-def daemon_stop_command(args: argparse.Namespace) -> None:
-    result = background_service_for_platform().stop()
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(format_daemon_lifecycle_result("Stopped", result))
-
-
-def daemon_restart_command(args: argparse.Namespace) -> None:
-    result = background_service_for_platform().restart()
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(format_daemon_lifecycle_result("Restarted", result))
-
-
-def daemon_uninstall_command(args: argparse.Namespace) -> None:
-    result = background_service_for_platform().uninstall()
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return
-    print(format_daemon_uninstall_result(result))
-
-
-def daemon_notify_command(args: argparse.Namespace) -> None:
+def scan_notify_command(args: argparse.Namespace) -> None:
     index = (
         scan_registered_projects(limit=args.limit, near_expiry_hours=args.near_expiry_hours)
         if args.scan
@@ -691,7 +651,7 @@ def daemon_notify_command(args: argparse.Namespace) -> None:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
-    print(format_daemon_notification(result))
+    print(format_scan_notification(result))
 
 
 def projects_list_command(args: argparse.Namespace) -> None:
@@ -1376,11 +1336,11 @@ def format_review_card_section(title: str, raw_candidates: Any, *, show_refs: bo
     return lines
 
 
-def format_daemon_status(status: Mapping[str, Any]) -> str:
+def format_scan_status(status: Mapping[str, Any]) -> str:
     projects = status.get("projects")
     project_rows = projects if isinstance(projects, list) else []
     lines = [
-        "Soul Daemon",
+        "Soul Scan",
         f"- generated_at: {status.get('generated_at', 'never')}",
         f"- projects: {status.get('project_count', len(project_rows))}",
     ]
@@ -1409,12 +1369,12 @@ def format_daemon_status(status: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_daemon_notification(result: Mapping[str, Any]) -> str:
+def format_scan_notification(result: Mapping[str, Any]) -> str:
     notifications = result.get("notifications")
     candidates = notifications if isinstance(notifications, list) else []
     delivery = mapping_or_empty(result.get("delivery"))
     lines = [
-        "Soul Daemon Notification",
+        "Soul Scan Notification",
         f"- generated_at: {result.get('generated_at', 'never')}",
         f"- dry_run: {bool(result.get('dry_run', False))}",
         f"- would_notify: {bool(result.get('would_notify', False))}",
@@ -1447,12 +1407,12 @@ def format_daemon_notification(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_daemon_background_status(status: Mapping[str, Any]) -> str:
+def format_service_status(status: Mapping[str, Any]) -> str:
     if status.get("unsupported"):
-        return f"Soul Background Service\n- platform: {status.get('platform', 'unknown')}\n- status: unsupported"
+        return f"Soul Service\n- platform: {status.get('platform', 'unknown')}\n- status: unsupported"
     target = status.get("plist_path") or status.get("task_name") or ""
     lines = [
-        "Soul Background Service",
+        "Soul Service",
         f"- platform: {status.get('platform', 'unknown')}",
         f"- id: {status.get('label') or status.get('task_name') or ''}",
         f"- installed: {bool(status.get('installed', False))}",
@@ -1465,12 +1425,12 @@ def format_daemon_background_status(status: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_daemon_install_result(result: Mapping[str, Any]) -> str:
+def format_service_install_result(result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
-        return f"Soul daemon install is unsupported on {result.get('platform', 'unknown')}."
+        return f"Soul service install is unsupported on {result.get('platform', 'unknown')}."
     target = result.get("plist_path") or result.get("task_name") or ""
     lines = [
-        "Installed Soul daemon.",
+        "Installed Soul service.",
         f"- platform: {result.get('platform', 'unknown')}",
         f"- id: {result.get('label') or result.get('task_name') or ''}",
         f"- target: {target}",
@@ -1482,19 +1442,13 @@ def format_daemon_install_result(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_service_install_result(result: Mapping[str, Any]) -> str:
+def format_service_uninstall_result(result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
-        return f"Soul service install is unsupported on {result.get('platform', 'unknown')}."
-    return format_daemon_install_result(result).replace("Soul daemon", "Soul service")
-
-
-def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
-    if result.get("unsupported"):
-        return f"Soul daemon uninstall is unsupported on {result.get('platform', 'unknown')}."
+        return f"Soul service uninstall is unsupported on {result.get('platform', 'unknown')}."
     target = result.get("plist_path") or result.get("task_name") or ""
     return "\n".join(
         [
-            "Uninstalled Soul daemon.",
+            "Uninstalled Soul service.",
             f"- platform: {result.get('platform', 'unknown')}",
             f"- id: {result.get('label') or result.get('task_name') or ''}",
             f"- target: {target}",
@@ -1503,17 +1457,11 @@ def format_daemon_uninstall_result(result: Mapping[str, Any]) -> str:
     )
 
 
-def format_service_uninstall_result(result: Mapping[str, Any]) -> str:
+def format_service_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
     if result.get("unsupported"):
-        return f"Soul service uninstall is unsupported on {result.get('platform', 'unknown')}."
-    return format_daemon_uninstall_result(result).replace("Soul daemon", "Soul service")
-
-
-def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
-    if result.get("unsupported"):
-        return f"Soul daemon {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
+        return f"Soul service {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
     lines = [
-        f"{action} Soul daemon.",
+        f"{action} Soul service.",
         f"- platform: {result.get('platform', 'unknown')}",
         f"- id: {result.get('label') or result.get('task_name') or ''}",
         f"- target: {result.get('plist_path') or result.get('task_name') or ''}",
@@ -1524,12 +1472,6 @@ def format_daemon_lifecycle_result(action: str, result: Mapping[str, Any]) -> st
         if result.get(key):
             lines.append(f"- {key}: {result.get(key)}")
     return "\n".join(lines)
-
-
-def format_service_lifecycle_result(action: str, result: Mapping[str, Any]) -> str:
-    if result.get("unsupported"):
-        return f"Soul service {action.lower()} is unsupported on {result.get('platform', 'unknown')}."
-    return format_daemon_lifecycle_result(action, result).replace("Soul daemon", "Soul service")
 
 
 def format_projects_prune_result(result: Mapping[str, Any]) -> str:
@@ -1918,22 +1860,22 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--limit", type=int, default=5)
     scan_parser.add_argument("--near-expiry-hours", type=int, default=4)
     scan_parser.add_argument("--json", action="store_true")
-    scan_parser.set_defaults(func=daemon_scan_command)
+    scan_parser.set_defaults(func=scan_command)
     scan_subparsers = scan_parser.add_subparsers(dest="scan_command")
     scan_status = scan_subparsers.add_parser("status", help="Show the latest Review Index scan result.")
     scan_status.add_argument("--json", action="store_true")
-    scan_status.set_defaults(func=daemon_status_command)
+    scan_status.set_defaults(func=scan_status_command)
     scan_run = scan_subparsers.add_parser("run", help="Run the scan loop in the foreground.")
     scan_run.add_argument("--interval-seconds", type=float, default=300.0)
     scan_run.add_argument("--once", action="store_true", help="Run one scan and exit.")
-    scan_run.set_defaults(func=daemon_run_command)
+    scan_run.set_defaults(func=scan_run_command)
     scan_notify = scan_subparsers.add_parser("notify", help="Send a desktop reminder for reviewable projects.")
     scan_notify.add_argument("--dry-run", action="store_true", help="Evaluate notification candidates without sending.")
     scan_notify.add_argument("--json", action="store_true", help="Print machine-readable notification result.")
     scan_notify.add_argument("--scan", action="store_true", help="Refresh the global review index before notifying.")
     scan_notify.add_argument("--limit", type=int, default=5)
     scan_notify.add_argument("--near-expiry-hours", type=int, default=4)
-    scan_notify.set_defaults(func=daemon_notify_command)
+    scan_notify.set_defaults(func=scan_notify_command)
 
     service_parser = subparsers.add_parser("service", help="Manage the user-level Soul scan background service.")
     service_subparsers = service_parser.add_subparsers(dest="service_command", required=True)

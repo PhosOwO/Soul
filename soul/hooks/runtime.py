@@ -141,7 +141,6 @@ def run_stop_hook(payload: dict[str, Any], *, host: HookHost) -> HookResult:
         project_record = register_project(
             project_dir,
             project_name=project_dir.name,
-            storage="local",
             state_owner_dir=project_dir,
             project_id=project_id_for_path(project_dir),
         )
@@ -326,7 +325,7 @@ def refresh_review_index(project_record: dict[str, Any]) -> None:
     if not project_id:
         return
     try:
-        from soul.services.daemon import refresh_registered_project
+        from soul.services.scan_core import refresh_registered_project
 
         refresh_registered_project(str(project_id))
     except Exception:

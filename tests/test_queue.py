@@ -139,7 +139,7 @@ def test_queue_drain_refreshes_review_index_after_dead_letter(tmp_path, monkeypa
         payload={"task": "", "outcome": ""},
     )
 
-    from soul.services.daemon import refresh_registered_project_for_state_owner
+    from soul.services.scan_core import refresh_registered_project_for_state_owner
 
     before = refresh_registered_project_for_state_owner(tmp_path)
     result = drain_queue(tmp_path, limit=1)

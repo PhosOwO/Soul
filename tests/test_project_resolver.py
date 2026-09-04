@@ -75,6 +75,35 @@ def test_register_auto_project_uses_project_state_for_git_project(tmp_path, monk
     assert registry["projects"][0]["project_id"] == record["project_id"]
 
 
+def test_load_project_registry_normalizes_legacy_global_storage_to_project_state(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    project = tmp_path / "repo"
+    project.mkdir()
+    legacy_state_root = soul_home / "projects" / "legacy" / ".soul" / "state"
+    save_project_registry(
+        {
+            "schema_version": 1,
+            "projects": [
+                {
+                    "project_id": "legacy",
+                    "project_dir": str(project),
+                    "project_name": "Repo",
+                    "storage": "global",
+                    "state_root": str(legacy_state_root),
+                    "state_path": str(legacy_state_root / "state.json"),
+                }
+            ],
+        }
+    )
+
+    record = load_project_registry()["projects"][0]
+
+    assert record["storage"] == "local"
+    assert Path(record["state_root"]) == project.resolve() / ".soul" / "state"
+    assert Path(record["state_path"]) == project.resolve() / ".soul" / "state" / "state.json"
+
+
 def test_prune_unavailable_projects_removes_only_stale_records(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))

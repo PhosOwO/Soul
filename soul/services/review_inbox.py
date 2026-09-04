@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from soul.services.daemon import load_review_index, refresh_registered_project, review_index_in_default_inbox, scan_registered_projects
+from soul.services.scan_core import load_review_index, refresh_registered_project, review_index_in_default_inbox, scan_registered_projects
 from soul.services.project_resolver import load_project_registry, state_owner_dir_from_record
 from soul.services.state_core.review.actions import (
     accept_review_candidate,

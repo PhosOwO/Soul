@@ -10,7 +10,7 @@ from pathlib import Path
 
 from soul.services.integrations.queue import enqueue_turn_evidence
 from soul.services.project_resolver import register_project
-from soul.services.daemon import (
+from soul.services.scan_core import (
     next_working_lifecycle_boundary,
     notification_candidates,
     notification_state_path,
@@ -44,7 +44,7 @@ def cli_env(soul_home: Path) -> dict[str, str]:
     return env
 
 
-def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
+def test_scan_service_scan_reports_due_review_candidates(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     project = tmp_path / "project"
@@ -131,13 +131,13 @@ def test_daemon_scan_reports_due_review_candidates(tmp_path, monkeypatch):
         check=True,
     )
 
-    assert "Soul Daemon" in status.stdout
+    assert "Soul Scan" in status.stdout
     assert "Project: review=2" in status.stdout
     assert "working=1 active/2 due/1 expired" in status.stdout
     assert "queue=1 backlog" in status.stdout
 
 
-def test_daemon_scan_records_next_lifecycle_boundary(tmp_path, monkeypatch):
+def test_scan_service_scan_records_next_lifecycle_boundary(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     project = tmp_path / "project"
@@ -193,7 +193,7 @@ def test_lifecycle_boundary_uses_near_expiry_before_expiry():
     assert boundary == "2026-08-26T14:00:00Z"
 
 
-def test_daemon_due_only_scan_skips_projects_before_lifecycle_boundary(tmp_path, monkeypatch):
+def test_scan_service_due_only_scan_skips_projects_before_lifecycle_boundary(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     project = tmp_path / "project"
@@ -237,7 +237,7 @@ def test_lifecycle_scan_keeps_projects_with_pending_work_due():
     )
 
 
-def test_daemon_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
+def test_scan_service_scan_marks_missing_project_unavailable(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     missing_project = tmp_path / "missing"
@@ -309,7 +309,7 @@ def review_index_payload(*, review_total: int = 1, needs_review: int = 1, ready_
     }
 
 
-def test_daemon_notify_dry_run_reports_candidates_without_writing_state(tmp_path, monkeypatch):
+def test_scan_service_notify_dry_run_reports_candidates_without_writing_state(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
 
@@ -345,7 +345,7 @@ def test_macos_notification_uses_osascript(monkeypatch):
     assert calls[0][1]["capture_output"] is True
 
 
-def test_daemon_notify_does_not_repeat_same_signature_inside_cooldown(tmp_path, monkeypatch):
+def test_scan_service_notify_does_not_repeat_same_signature_inside_cooldown(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     deliveries = []
@@ -354,7 +354,7 @@ def test_daemon_notify_does_not_repeat_same_signature_inside_cooldown(tmp_path, 
         deliveries.append((title, body, platform_name))
         return {"attempted": True, "delivered": True, "platform": platform_name or "darwin"}
 
-    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fake_send)
+    monkeypatch.setattr("soul.services.scan_core.send_desktop_notification", fake_send)
     index = review_index_payload()
 
     first = notify_review_index(index, now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC), platform_name="darwin")
@@ -367,7 +367,7 @@ def test_daemon_notify_does_not_repeat_same_signature_inside_cooldown(tmp_path, 
     assert state["projects"]["project-1"]["last_signature"] == "needs=1;ready=0;backlog=0"
 
 
-def test_daemon_notify_does_not_repeat_same_signature_after_cooldown(tmp_path, monkeypatch):
+def test_scan_service_notify_does_not_repeat_same_signature_after_cooldown(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     deliveries = []
@@ -376,7 +376,7 @@ def test_daemon_notify_does_not_repeat_same_signature_after_cooldown(tmp_path, m
         deliveries.append((title, body, platform_name))
         return {"attempted": True, "delivered": True, "platform": platform_name or "darwin"}
 
-    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fake_send)
+    monkeypatch.setattr("soul.services.scan_core.send_desktop_notification", fake_send)
     index = review_index_payload(review_total=3, needs_review=3)
 
     first = notify_review_index(index, now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC), platform_name="darwin")
@@ -409,7 +409,7 @@ def test_queue_backlog_does_not_repeat_when_unchanged_after_notification(tmp_pat
         deliveries.append((title, body, platform_name))
         return {"attempted": True, "delivered": True, "platform": platform_name or "darwin"}
 
-    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fake_send)
+    monkeypatch.setattr("soul.services.scan_core.send_desktop_notification", fake_send)
 
     first = notify_review_index(index, now=datetime(2026, 8, 26, 12, 0, tzinfo=UTC), platform_name="darwin")
     second = notify_review_index(index, now=datetime(2026, 8, 26, 15, 0, tzinfo=UTC), platform_name="darwin")
@@ -427,7 +427,7 @@ def test_notify_captures_desktop_delivery_exception(tmp_path, monkeypatch):
     def fail_send(title, body, *, platform_name=None):
         raise RuntimeError("notification transport failed")
 
-    monkeypatch.setattr("soul.services.daemon.send_desktop_notification", fail_send)
+    monkeypatch.setattr("soul.services.scan_core.send_desktop_notification", fail_send)
 
     result = notify_review_index(
         review_index_payload(),
@@ -505,7 +505,7 @@ def test_notify_dry_run_without_candidates_reports_stable_reason(tmp_path, monke
     assert result["delivery"]["attempted"] is False
 
 
-def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch):
+def test_scan_service_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     write_review_index(review_index_payload())
@@ -526,7 +526,7 @@ def test_daemon_notify_cli_dry_run_json_reads_review_index(tmp_path, monkeypatch
     assert not (soul_home / "notification_state.json").exists()
 
 
-def test_daemon_status_cli_reads_review_index_not_legacy_status(tmp_path, monkeypatch):
+def test_scan_service_status_cli_reads_review_index_not_legacy_status(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
     write_review_index(review_index_payload(review_total=3, needs_review=2, ready_to_confirm=1))
@@ -564,22 +564,22 @@ def test_daemon_status_cli_reads_review_index_not_legacy_status(tmp_path, monkey
     assert payload["projects"][0]["review"]["total"] == 3
 
 
-def test_macos_launch_agent_plist_runs_daemon_loop(tmp_path, monkeypatch):
+def test_macos_launch_agent_plist_runs_scan_loop(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
 
     plist = build_macos_launch_agent_plist(interval_seconds=123)
 
-    assert plist["Label"] == "com.soulkit.daemon"
+    assert plist["Label"] == "com.soulkit.scan"
     assert plist["ProgramArguments"][:5] == [sys.executable, "-m", "soul.cli", "scan", "run"]
     assert plist["ProgramArguments"][-1] == "123"
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
     assert plist["EnvironmentVariables"]["SOUL_HOME"] == str(soul_home.resolve())
-    assert plist["StandardOutPath"] == str(soul_home.resolve() / "logs" / "daemon.log")
+    assert plist["StandardOutPath"] == str(soul_home.resolve() / "logs" / "scan.log")
 
 
-def test_macos_daemon_install_writes_plist_and_bootstraps(tmp_path, monkeypatch):
+def test_macos_service_install_writes_plist_and_bootstraps(tmp_path, monkeypatch):
     soul_home = tmp_path / "soul-home"
     home = tmp_path / "home"
     monkeypatch.setenv("SOUL_HOME", str(soul_home))
@@ -603,7 +603,7 @@ def test_macos_daemon_install_writes_plist_and_bootstraps(tmp_path, monkeypatch)
     assert b"<string>321</string>" in plist_path.read_bytes()
 
 
-def test_macos_daemon_uninstall_removes_plist_and_boots_out(tmp_path, monkeypatch):
+def test_macos_service_uninstall_removes_plist_and_boots_out(tmp_path, monkeypatch):
     home = tmp_path / "home"
     plist_path = macos_launch_agent_path(home_dir=home)
     plist_path.parent.mkdir(parents=True)
@@ -620,8 +620,12 @@ def test_macos_daemon_uninstall_removes_plist_and_boots_out(tmp_path, monkeypatc
 
     assert result["ok"] is True
     assert result["removed"] is True
+    assert result["legacy_removed"] is False
     assert not plist_path.exists()
-    assert calls == [["bootout", "gui/501", str(plist_path)]]
+    assert calls == [
+        ["bootout", "gui/501", str(plist_path)],
+        ["bootout", "gui/501", str(plist_path.with_name("com.soulkit.daemon.plist"))],
+    ]
 
 
 def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
@@ -631,7 +635,7 @@ def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
     plist_path.write_text("plist", encoding="utf-8")
 
     def fake_run_launchctl(args):
-        assert args == ["print", "gui/501/com.soulkit.daemon"]
+        assert args == ["print", "gui/501/com.soulkit.scan"]
         return subprocess.CompletedProcess(["launchctl", *args], 0, "running", "")
 
     monkeypatch.setattr("soul.services.background.macos.run_launchctl", fake_run_launchctl)
@@ -643,7 +647,7 @@ def test_macos_launch_agent_status_reports_loaded(tmp_path, monkeypatch):
     assert result["launchctl"]["stdout"] == "running"
 
 
-def test_daemon_command_is_not_supported(tmp_path):
+def test_scan_service_command_is_not_supported(tmp_path):
     soul_home = tmp_path / "soul-home"
 
     completed = subprocess.run(
@@ -667,10 +671,41 @@ def test_windows_background_install_no_load_is_structured(tmp_path, monkeypatch)
 
     assert result["ok"] is True
     assert result["platform"] == "win32"
-    assert result["task_name"] == "SoulKitDaemon"
+    assert result["task_name"] == "SoulKitScanService"
     assert result["loaded"] is False
     assert Path(str(result["script_path"])).is_file()
-    assert "soul.cli scan run" in Path(str(result["script_path"])).read_text(encoding="utf-8")
+    script_bytes = Path(str(result["script_path"])).read_bytes()
+    assert b"\r\r\n" not in script_bytes
+    assert "soul.cli scan run" in script_bytes.decode("utf-8")
+
+
+def test_windows_background_uninstall_removes_new_and_legacy_scripts(tmp_path, monkeypatch):
+    soul_home = tmp_path / "soul-home"
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    script_path = soul_home / "background" / "soul-scan-service.cmd"
+    legacy_script_path = soul_home / "background" / "soul-daemon.cmd"
+    script_path.parent.mkdir(parents=True)
+    script_path.write_text("scan", encoding="utf-8")
+    legacy_script_path.write_text("daemon", encoding="utf-8")
+    calls = []
+
+    def fake_run_schtasks(args):
+        calls.append(args)
+        return subprocess.CompletedProcess(["schtasks.exe", *args], 1, "", "not found")
+
+    monkeypatch.setattr("soul.services.background.windows.run_schtasks", fake_run_schtasks)
+
+    result = WindowsBackgroundService().uninstall()
+
+    assert result["ok"] is True
+    assert result["script_removed"] is True
+    assert result["legacy_script_removed"] is True
+    assert not script_path.exists()
+    assert not legacy_script_path.exists()
+    assert calls == [
+        ["/Delete", "/TN", "SoulKitScanService", "/F"],
+        ["/Delete", "/TN", "SoulKitDaemon", "/F"],
+    ]
 
 
 def test_scan_run_once_cli_refreshes_review_index(tmp_path, monkeypatch):
@@ -745,3 +780,5 @@ def test_service_status_cli_json_is_structured(tmp_path):
 
     assert payload["platform"] == sys.platform
     assert payload["capability"] == "background_service"
+
+

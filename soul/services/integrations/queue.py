@@ -226,7 +226,7 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
 
 def refresh_review_index_for_project(project_dir: Path) -> None:
     try:
-        from soul.services.daemon import notify_review_index, refresh_registered_project_for_state_owner
+        from soul.services.scan_core import notify_review_index, refresh_registered_project_for_state_owner
 
         project = refresh_registered_project_for_state_owner(project_dir)
         if project is not None:

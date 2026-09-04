@@ -8,8 +8,9 @@ from typing import Any
 
 from soul import __version__
 from soul.api import SoulApi
-from soul.services.project_resolver import resolve_project_dir
+from soul.services.project_resolver import find_git_root, find_soul_project_root, resolve_project_dir
 from soul.services.shared.constants import HOST_SOUL_MCP
+from soul.services.state_core.state_store import load_state
 
 
 SERVER_NAME = "soul-core-mcp"
@@ -26,8 +27,8 @@ TOOLS: list[dict[str, Any]] = [
                 "task": {"type": "string"},
                 "scope": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1},
-                    "project_dir": {"type": "string"},
-                    "cwd": {"type": "string"},
+                "project_dir": {"type": "string"},
+                "cwd": {"type": "string"},
             },
         },
     },
@@ -158,14 +159,24 @@ class SoulMcpServer:
     def __init__(self, project_dir: Path | None = None) -> None:
         self.project_dir = resolve_project_dir(project_dir)
 
-    def api_for_arguments(self, arguments: dict[str, Any]) -> SoulApi:
+    def existing_project_api_for_arguments(self, arguments: dict[str, Any]) -> SoulApi | None:
+        project_dir = find_soul_project_root(self.start_path_for_arguments(arguments))
+        if project_dir is None:
+            return None
+        return SoulApi(project_dir, register=False)
+
+    def activated_project_api_for_arguments(self, arguments: dict[str, Any]) -> SoulApi | None:
+        start = self.start_path_for_arguments(arguments)
+        project_dir = find_soul_project_root(start) or find_git_root(start)
+        if project_dir is None:
+            return None
+        load_state(project_dir, project_name=project_dir.name)
+        return SoulApi(project_dir, register=True)
+
+    def start_path_for_arguments(self, arguments: dict[str, Any]) -> Path:
         raw_project_dir = arguments.get("project_dir")
         raw_cwd = arguments.get("cwd")
-        project_dir = resolve_project_dir(
-            str(raw_project_dir) if raw_project_dir else None,
-            cwd=str(raw_cwd) if raw_cwd else self.project_dir,
-        )
-        return SoulApi(project_dir)
+        return Path(str(raw_project_dir or raw_cwd or self.project_dir)).expanduser().resolve()
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any] | None:
         request_id = request.get("id")
@@ -199,7 +210,14 @@ class SoulMcpServer:
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         if name == "get_projected_state":
-            payload = self.api_for_arguments(arguments).get_state(
+            api = self.existing_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "get_projected_state",
+                    "soul_project_not_found",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
+            payload = api.get_state(
                 task=str(arguments.get("task", "")),
                 scope=str(arguments.get("scope", "project")),
                 limit=int_value(arguments.get("limit"), default=10),
@@ -224,7 +242,14 @@ class SoulMcpServer:
             episode = arguments.get("episode")
             episode_payload = episode if isinstance(episode, dict) else None
             reme = arguments.get("reme")
-            payload = self.api_for_arguments(arguments).enqueue_evidence(
+            api = self.activated_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "observe_evidence",
+                    "not_soul_project_or_git_repo",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
+            payload = api.enqueue_evidence(
                 evidence=evidence,
                 episode=episode_payload,
                 reme=reme if isinstance(reme, dict) else None,
@@ -233,8 +258,15 @@ class SoulMcpServer:
 
         if name == "read_evidence":
             reme = arguments.get("reme")
+            api = self.existing_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "read_evidence",
+                    "soul_project_not_found",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
             return tool_result(
-                self.api_for_arguments(arguments).read_evidence(
+                api.read_evidence(
                     path=str(arguments["path"]),
                     start_line=optional_int(arguments.get("start_line")),
                     end_line=optional_int(arguments.get("end_line")),
@@ -244,8 +276,15 @@ class SoulMcpServer:
 
         if name == "trace_evidence":
             reme = arguments.get("reme")
+            api = self.existing_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "trace_evidence",
+                    "soul_project_not_found",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
             return tool_result(
-                self.api_for_arguments(arguments).trace_evidence(
+                api.trace_evidence(
                     path=str(arguments["path"]),
                     depth=int_value(arguments.get("depth"), default=1),
                     direction=str(arguments.get("direction") or "both"),
@@ -255,8 +294,15 @@ class SoulMcpServer:
 
         if name == "consolidate_memory":
             reme = arguments.get("reme")
+            api = self.existing_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "consolidate_memory",
+                    "soul_project_not_found",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
             return tool_result(
-                self.api_for_arguments(arguments).consolidate_memory(
+                api.consolidate_memory(
                     date=str(arguments.get("date") or ""),
                     hint=str(arguments.get("hint") or ""),
                     scan_days=optional_int(arguments.get("scan_days")),
@@ -267,8 +313,15 @@ class SoulMcpServer:
 
         if name == "get_proactive_topics":
             reme = arguments.get("reme")
+            api = self.existing_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "get_proactive_topics",
+                    "soul_project_not_found",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
             return tool_result(
-                self.api_for_arguments(arguments).get_proactive_topics(
+                api.get_proactive_topics(
                     date=str(arguments.get("date") or ""),
                     include_content=bool(arguments.get("include_content", False)),
                     reme=reme if isinstance(reme, dict) else None,
@@ -279,12 +332,26 @@ class SoulMcpServer:
             evidence = arguments.get("evidence")
             if not isinstance(evidence, dict):
                 raise ValueError("propose_patch requires object argument: evidence")
-            return tool_result(dict(self.api_for_arguments(arguments).propose_patch(evidence)))
+            api = self.activated_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "propose_patch",
+                    "not_soul_project_or_git_repo",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
+            return tool_result(dict(api.propose_patch(evidence)))
 
         if name == "apply_patch":
             proposal_id = str(arguments["proposal_id"])
             confirmed_by = str(arguments.get("confirmed_by", HOST_SOUL_MCP))
-            return tool_result(self.api_for_arguments(arguments).apply_patch(proposal_id, confirmed_by=confirmed_by))
+            api = self.activated_project_api_for_arguments(arguments)
+            if api is None:
+                return skipped_tool_result(
+                    "apply_patch",
+                    "not_soul_project_or_git_repo",
+                    project_dir=self.start_path_for_arguments(arguments),
+                )
+            return tool_result(api.apply_patch(proposal_id, confirmed_by=confirmed_by))
 
         raise ValueError(f"Unknown tool: {name}")
 
@@ -307,6 +374,21 @@ def tool_result(payload: dict[str, Any]) -> dict[str, Any]:
         ],
         "structuredContent": payload,
     }
+
+
+def skipped_payload(operation: str, reason: str, *, project_dir: Path) -> dict[str, Any]:
+    return {
+        "operation": operation,
+        "skipped": True,
+        "reason": reason,
+        "project_dir": str(project_dir),
+        "context": "",
+        "injection": "",
+    }
+
+
+def skipped_tool_result(operation: str, reason: str, *, project_dir: Path) -> dict[str, Any]:
+    return tool_result(skipped_payload(operation, reason, project_dir=project_dir))
 
 
 def int_value(value: Any, default: int) -> int:

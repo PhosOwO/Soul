@@ -7,17 +7,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from soul.services.background.macos import (
-    DEFAULT_BACKGROUND_INTERVAL_SECONDS,
-    MACOS_DAEMON_LABEL,
-    MACOS_LAUNCH_AGENT_NAME,
-    MacOSBackgroundService,
-    build_macos_launch_agent_plist,
-    launchctl_result,
-    macos_launch_agent_path,
-    macos_launchd_domain,
-    run_launchctl,
-)
 from soul.services.integrations.queue import (
     EVENT_BLOCKED,
     EVENT_COMPLETED,
@@ -56,95 +45,6 @@ def review_index_path() -> Path:
 
 def notification_state_path() -> Path:
     return projects_registry_path().with_name(NOTIFICATION_STATE_NAME)
-
-
-def daemon_log_dir() -> Path:
-    return projects_registry_path().parent / "logs"
-
-
-def package_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def install_macos_launch_agent(
-    *,
-    interval_seconds: float = DEFAULT_BACKGROUND_INTERVAL_SECONDS,
-    load: bool = True,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).install(interval_seconds=interval_seconds, load=load)
-
-
-def start_macos_launch_agent(
-    *,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).start()
-
-
-def stop_macos_launch_agent(
-    *,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).stop()
-
-
-def restart_macos_launch_agent(
-    *,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).restart()
-
-
-def uninstall_macos_launch_agent(
-    *,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {"ok": False, "unsupported": True, "platform": platform, "label": MACOS_DAEMON_LABEL}
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).uninstall()
-
-
-def macos_launch_agent_status(
-    *,
-    platform_name: str | None = None,
-    home_dir: Path | None = None,
-    user_id: int | None = None,
-) -> dict[str, Any]:
-    platform = platform_name or sys.platform
-    if platform != "darwin":
-        return {
-            "platform": platform,
-            "label": MACOS_DAEMON_LABEL,
-            "plist_path": str(macos_launch_agent_path(home_dir=home_dir)),
-            "installed": False,
-            "loaded": False,
-            "unsupported": True,
-        }
-    return MacOSBackgroundService(home_dir=home_dir, user_id=user_id).status()
 
 
 def working_lifecycle_summary(
@@ -308,7 +208,7 @@ def scan_project_record(
             "queue": result["queue"],
             "lifecycle": mapping_or_empty(record.get("lifecycle")),
         }
-    if record.get("storage") != "global" and record.get("state_path") and not Path(str(record["state_path"])).exists():
+    if record.get("state_path") and not Path(str(record["state_path"])).exists():
         result = {
             **base_project,
             "available": False,
@@ -783,10 +683,11 @@ def write_review_index(index: dict[str, Any]) -> None:
     path.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def daemon_loop(*, interval_seconds: float = 300.0, once: bool = False) -> None:
+def scan_loop(*, interval_seconds: float = 300.0, once: bool = False) -> None:
     while True:
         status = scan_registered_projects(due_only=True)
         notify_review_index(status)
         if once:
             return
         time.sleep(interval_seconds)
+

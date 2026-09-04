@@ -28,7 +28,7 @@ from soul.services.reme.reme_transition import propose_reme_transition as propos
 from soul.services.integrations.integration_runs import append_integration_run
 from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
-from soul.services.daemon import refresh_registered_project_for_state_owner
+from soul.services.scan_core import refresh_registered_project_for_state_owner
 from soul.services.project_resolver import register_project, resolve_project_dir
 from soul.services.review_inbox import ReviewInboxService
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, propose_patch

@@ -12,8 +12,6 @@ from soul.services.state_core.state_store import utc_now
 
 
 PROJECTS_REGISTRY_NAME = "projects.json"
-GLOBAL_PROJECTS_DIR_NAME = "projects"
-STORAGE_GLOBAL = "global"
 STORAGE_LOCAL = "local"
 
 
@@ -75,14 +73,7 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
     raw_project_dir = record.get("project_dir")
     project_dir = Path(str(raw_project_dir or ".")).expanduser().resolve()
     project_id = str(record.get("project_id") or project_id_for_path(project_dir))
-    storage = str(record.get("storage") or STORAGE_LOCAL)
-    state_root = record.get("state_root")
-    if state_root:
-        resolved_state_root = Path(str(state_root)).expanduser().resolve()
-    elif record.get("state_path"):
-        resolved_state_root = Path(str(record["state_path"])).expanduser().resolve().parent
-    else:
-        resolved_state_root = default_state_root(project_dir, storage=storage, project_id=project_id)
+    resolved_state_root = default_state_root(project_dir)
     now = utc_now()
     lifecycle = record.get("lifecycle") if isinstance(record.get("lifecycle"), dict) else {}
     next_lifecycle_scan_at = record.get("next_lifecycle_scan_at") or lifecycle.get("next_lifecycle_scan_at")
@@ -97,7 +88,7 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
         "state_path": str(resolved_state_root / "state.json"),
         "reme_root": str(project_dir / SOUL_DIR_NAME / "reme"),
         "traces_root": str(project_dir / SOUL_DIR_NAME / "traces"),
-        "storage": storage,
+        "storage": STORAGE_LOCAL,
         "status": str(record.get("status") or "active"),
         "first_seen_at": str(record.get("first_seen_at") or record.get("last_seen_at") or now),
         "last_seen_at": str(record.get("last_seen_at") or now),
@@ -111,18 +102,12 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def global_project_dir(project_id: str) -> Path:
-    return soul_home() / GLOBAL_PROJECTS_DIR_NAME / project_id
-
-
 def project_id_for_path(project_dir: Path) -> str:
     digest = hashlib.sha1(str(project_dir.expanduser().resolve()).encode("utf-8")).hexdigest()
     return digest[:16]
 
 
-def default_state_root(project_dir: Path, *, storage: str, project_id: str) -> Path:
-    if storage == STORAGE_GLOBAL:
-        return global_project_dir(project_id) / SOUL_DIR_NAME / STATE_DIR_NAME
+def default_state_root(project_dir: Path) -> Path:
     return project_dir / SOUL_DIR_NAME / STATE_DIR_NAME
 
 
@@ -138,14 +123,13 @@ def register_project(
     project_dir: Path,
     *,
     project_name: str | None = None,
-    storage: str = STORAGE_LOCAL,
     state_owner_dir: Path | None = None,
     project_id: str | None = None,
 ) -> dict[str, Any]:
     project = project_dir.expanduser().resolve()
     resolved_project_id = project_id or project_id_for_path(project)
     owner_dir = (state_owner_dir or project).expanduser().resolve()
-    state_root = default_state_root(project, storage=storage, project_id=resolved_project_id)
+    state_root = default_state_root(project)
     if state_owner_dir is not None:
         state_root = owner_dir / SOUL_DIR_NAME / STATE_DIR_NAME
     registry = load_project_registry()
@@ -168,7 +152,7 @@ def register_project(
         "state_path": str(state_root / "state.json"),
         "reme_root": str(project / SOUL_DIR_NAME / "reme"),
         "traces_root": str(project / SOUL_DIR_NAME / "traces"),
-        "storage": storage,
+        "storage": STORAGE_LOCAL,
         "status": "active",
         "first_seen_at": (existing or {}).get("first_seen_at") or now,
         "last_seen_at": now,
@@ -207,7 +191,6 @@ def register_auto_project(raw_project_dir: str | Path | None = None, *, cwd: str
     return register_project(
         git_root,
         project_name=git_root.name,
-        storage=STORAGE_LOCAL,
         state_owner_dir=git_root,
         project_id=project_id,
     )

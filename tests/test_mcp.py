@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from soul.adapters.reme import ReMeJobResult
 from soul.mcp import SoulMcpServer
+from soul.services.scan_core import scan_registered_projects
 from soul.services.state import load_state
 
 
@@ -64,6 +65,36 @@ def test_mcp_get_projected_state_returns_tool_content(tmp_path: Path) -> None:
     assert '"operation": "get_state"' in runs
 
 
+def test_mcp_get_projected_state_skips_plain_directory_without_creating_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_home = tmp_path / "soul-home"
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    response = require_response(
+        SoulMcpServer(plain).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 21,
+                "method": "tools/call",
+                "params": {
+                    "name": "get_projected_state",
+                    "arguments": {"task": "What should we do next?"},
+                },
+            }
+        )
+    )
+
+    payload = response["result"]["structuredContent"]
+    assert payload["skipped"] is True
+    assert payload["reason"] == "soul_project_not_found"
+    assert not (plain / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
+
+
 def test_mcp_observe_evidence_enqueues_reme_processing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -111,6 +142,112 @@ def test_mcp_observe_evidence_enqueues_reme_processing(
     runs = (tmp_path / ".soul" / "state" / "integration_runs.jsonl").read_text(encoding="utf-8")
     assert '"host": "test-mcp"' in runs
     assert '"operation": "enqueue_evidence"' in runs
+
+
+def test_mcp_observe_evidence_skips_plain_directory_without_creating_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_home = tmp_path / "soul-home"
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    response = require_response(
+        SoulMcpServer(plain).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 31,
+                "method": "tools/call",
+                "params": {
+                    "name": "observe_evidence",
+                    "arguments": {
+                        "task": "Capture this turn",
+                        "summary": "Should not activate a plain directory.",
+                    },
+                },
+            }
+        )
+    )
+
+    payload = response["result"]["structuredContent"]
+    assert payload["skipped"] is True
+    assert payload["reason"] == "not_soul_project_or_git_repo"
+    assert not (plain / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
+
+
+def test_mcp_observe_evidence_auto_activates_git_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_home = tmp_path / "soul-home"
+    project = tmp_path / "repo"
+    nested = project / "packages" / "app"
+    nested.mkdir(parents=True)
+    (project / ".git").mkdir()
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    monkeypatch.setenv("SOUL_DISABLE_BACKGROUND_DRAIN", "1")
+
+    response = require_response(
+        SoulMcpServer(tmp_path).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 32,
+                "method": "tools/call",
+                "params": {
+                    "name": "observe_evidence",
+                    "arguments": {
+                        "cwd": str(nested),
+                        "task": "Capture this turn",
+                        "summary": "Git projects can be auto activated.",
+                    },
+                },
+            }
+        )
+    )
+
+    payload = response["result"]["structuredContent"]
+    assert payload["queued"] is True
+    assert (project / ".soul" / "state" / "state.json").is_file()
+    assert (project / ".soul" / "state" / "queue" / "jobs.jsonl").is_file()
+    registry = json.loads((soul_home / "projects.json").read_text(encoding="utf-8"))
+    assert registry["projects"][0]["project_dir"] == str(project.resolve())
+    scan = scan_registered_projects()
+    assert scan["projects"][0]["status"] == "active"
+    assert scan["projects"][0]["available"] is True
+
+
+def test_mcp_consolidate_memory_requires_existing_soul_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_home = tmp_path / "soul-home"
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / ".git").mkdir()
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+
+    response = require_response(
+        SoulMcpServer(project).handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 33,
+                "method": "tools/call",
+                "params": {
+                    "name": "consolidate_memory",
+                    "arguments": {"date": "2026-09-03"},
+                },
+            }
+        )
+    )
+
+    payload = response["result"]["structuredContent"]
+    assert payload["skipped"] is True
+    assert payload["reason"] == "soul_project_not_found"
+    assert not (project / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
 
 
 def test_mcp_observe_evidence_routes_by_argument_cwd(
