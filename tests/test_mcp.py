@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import io
 from pathlib import Path
 from typing import Any
 
 import pytest
 from soul.adapters.reme import ReMeJobResult
-from soul.mcp import SoulMcpServer
+from soul.mcp import SoulMcpServer, serve_stdio
 from soul.services.scan_core import scan_registered_projects
 from soul.services.state import load_state
 
@@ -91,6 +92,37 @@ def test_mcp_get_projected_state_skips_plain_directory_without_creating_state(
     payload = response["result"]["structuredContent"]
     assert payload["skipped"] is True
     assert payload["reason"] == "soul_project_not_found"
+    assert not (plain / ".soul").exists()
+    assert not (soul_home / "projects.json").exists()
+
+
+def test_mcp_stdio_accepts_utf8_bom_prefixed_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    soul_home = tmp_path / "soul-home"
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("SOUL_HOME", str(soul_home))
+    request = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_projected_state",
+            "arguments": {"task": "check"},
+        },
+    }
+    stdout = io.StringIO()
+    monkeypatch.setattr("sys.stdin", io.StringIO("\ufeff" + json.dumps(request) + "\n"))
+    monkeypatch.setattr("sys.stdout", stdout)
+
+    serve_stdio(plain)
+
+    response = json.loads(stdout.getvalue())
+    structured = response["result"]["structuredContent"]
+    assert structured["skipped"] is True
+    assert structured["reason"] == "soul_project_not_found"
     assert not (plain / ".soul").exists()
     assert not (soul_home / "projects.json").exists()
 

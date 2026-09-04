@@ -406,6 +406,7 @@ def optional_int(value: Any) -> int | None:
 def serve_stdio(project_dir: Path) -> None:
     server = SoulMcpServer(project_dir.resolve())
     for line in sys.stdin:
+        line = line.lstrip("\ufeff")
         if not line.strip():
             continue
         response = server.handle(json.loads(line))
