@@ -134,7 +134,9 @@ def queue_status_command(args: argparse.Namespace) -> None:
     else:
         print("- last completed: none")
     if summary.last_error:
-        print(f"- last error: {summary.last_error.get('error', 'unknown')}")
+        reason = summary.last_error.get("blocked_reason")
+        suffix = f" [{reason}]" if reason else ""
+        print(f"- last error{suffix}: {summary.last_error.get('error', 'unknown')}")
     else:
         print("- last error: none")
 
@@ -1533,7 +1535,9 @@ def print_queue_summary(summary: Any) -> None:
         )
         print(f"  - last completed: {summary.last_completed.get('created_at', 'unknown')}{working}")
     if summary.last_error:
-        print(f"  - last error: {summary.last_error.get('error', 'unknown')}")
+        reason = summary.last_error.get("blocked_reason")
+        suffix = f" [{reason}]" if reason else ""
+        print(f"  - last error{suffix}: {summary.last_error.get('error', 'unknown')}")
 
 
 def print_file_summary(label: str, files: list[Path], project_dir: Path) -> None:

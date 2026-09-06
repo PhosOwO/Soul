@@ -34,6 +34,9 @@ APPEND_LOCK_TIMEOUT_SECONDS = 5.0
 APPEND_LOCK_POLL_SECONDS = 0.01
 _APPEND_LOCKS_GUARD = threading.Lock()
 _APPEND_LOCKS: dict[Path, threading.Lock] = {}
+BLOCKED_REASON_CONFIGURATION = "configuration"
+BLOCKED_REASON_LLM_BILLING_OR_AUTH = "llm_billing_or_auth"
+BLOCKED_REASON_MISSING_RESOURCE = "missing_resource"
 
 QueueEventName = Literal["queued", "started", "completed", "failed", "blocked", "dead_letter"]
 
@@ -211,6 +214,7 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
     except Exception as exc:
         retryable = is_retryable_error(exc)
         event: QueueEventName = EVENT_FAILED if retryable and selection.attempt < MAX_ATTEMPTS else EVENT_BLOCKED
+        blocked_reason = None if event != EVENT_BLOCKED else blocked_reason_for_error(exc)
         append_queue_event(
             project_dir,
             job_id,
@@ -218,10 +222,11 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             attempt=selection.attempt,
             idempotency_key=idempotency_key,
             error=compact_error(exc),
+            blocked_reason=blocked_reason,
             retryable=retryable,
             next_run_at=next_run_at(selection.attempt) if retryable and selection.attempt < MAX_ATTEMPTS else None,
         )
-        return {"job_id": job_id, "status": event, "error": compact_error(exc)}
+        return {"job_id": job_id, "status": event, "error": compact_error(exc), "blocked_reason": blocked_reason}
 
 
 def refresh_review_index_for_project(project_dir: Path) -> None:
@@ -385,11 +390,41 @@ def parse_time(value: str) -> datetime:
 
 
 def is_retryable_error(exc: Exception) -> bool:
+    return blocked_reason_for_error(exc) is None
+
+
+def blocked_reason_for_error(exc: Exception) -> str | None:
     text = str(exc).lower()
-    blocked_markers = ["missing credentials", "api_key", "openai_api_key", "workload_identity", "not found", "no such file"]
-    if any(marker in text for marker in blocked_markers):
-        return False
-    return True
+    billing_or_auth_markers = [
+        "insufficient balance",
+        "payment required",
+        "billing",
+        "quota",
+        "unauthorized",
+        "forbidden",
+        "401",
+        "402",
+        "403",
+        "invalid api key",
+        "invalid_api_key",
+        "api key invalid",
+        "authentication",
+        "permission denied",
+    ]
+    configuration_markers = [
+        "missing credentials",
+        "api_key",
+        "openai_api_key",
+        "workload_identity",
+    ]
+    missing_resource_markers = ["not found", "no such file"]
+    if any(marker in text for marker in billing_or_auth_markers):
+        return BLOCKED_REASON_LLM_BILLING_OR_AUTH
+    if any(marker in text for marker in configuration_markers):
+        return BLOCKED_REASON_CONFIGURATION
+    if any(marker in text for marker in missing_resource_markers):
+        return BLOCKED_REASON_MISSING_RESOURCE
+    return None
 
 
 def stable_turn_id(payload: dict[str, Any]) -> str:

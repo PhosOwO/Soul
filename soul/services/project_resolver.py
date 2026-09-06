@@ -13,6 +13,27 @@ from soul.services.state_core.state_store import utc_now
 
 PROJECTS_REGISTRY_NAME = "projects.json"
 STORAGE_LOCAL = "local"
+PROJECT_MARKER_FILES = {
+    ".git",
+    "package.json",
+    "pyproject.toml",
+    "Cargo.toml",
+    "go.mod",
+    "pnpm-workspace.yaml",
+    "yarn.lock",
+    "package-lock.json",
+    "uv.lock",
+    "poetry.lock",
+    "requirements.txt",
+    "pom.xml",
+    "build.gradle",
+    "settings.gradle",
+    "hvigorfile.ts",
+    "hvigorfile.js",
+}
+DEFAULT_IGNORED_PROJECT_PATTERNS = {
+    "*/.trae/cli/memories",
+}
 
 
 def resolve_project_dir(
@@ -58,6 +79,47 @@ def find_git_root(start: Path) -> Path | None:
         if (candidate / ".git").exists():
             return candidate
     return None
+
+
+def is_disallowed_project_dir(path: Path) -> bool:
+    project = path.expanduser().resolve()
+    parts = {part.lower() for part in project.parts}
+    if SOUL_DIR_NAME in parts or "__macosx" in parts:
+        return True
+
+    soul_root = soul_home().expanduser().resolve()
+    try:
+        project.relative_to(soul_root)
+        return True
+    except ValueError:
+        return False
+
+
+def is_ignored_project_dir(path: Path, patterns: set[str] | None = None) -> bool:
+    project = path.expanduser().resolve()
+    normalized = project.as_posix().lower()
+    return any(project_matches_pattern(normalized, pattern) for pattern in (patterns or DEFAULT_IGNORED_PROJECT_PATTERNS))
+
+
+def project_matches_pattern(normalized_path: str, pattern: str) -> bool:
+    normalized_pattern = pattern.replace("\\", "/").lower().strip()
+    if normalized_pattern.startswith("*/"):
+        return normalized_path.endswith(normalized_pattern[1:])
+    return normalized_path == normalized_pattern or normalized_path.endswith("/" + normalized_pattern)
+
+
+def has_project_marker(path: Path) -> bool:
+    project = path.expanduser().resolve()
+    return any((project / marker).exists() for marker in PROJECT_MARKER_FILES)
+
+
+def is_eligible_auto_project_dir(path: Path) -> bool:
+    project = path.expanduser().resolve()
+    return (
+        not is_disallowed_project_dir(project)
+        and not is_ignored_project_dir(project)
+        and (is_soul_project(project) or has_project_marker(project))
+    )
 
 
 def is_soul_project(path: Path) -> bool:
@@ -127,6 +189,8 @@ def register_project(
     project_id: str | None = None,
 ) -> dict[str, Any]:
     project = project_dir.expanduser().resolve()
+    if is_disallowed_project_dir(project):
+        raise ValueError(f"Refusing to register non-project directory: {project}")
     resolved_project_id = project_id or project_id_for_path(project)
     owner_dir = (state_owner_dir or project).expanduser().resolve()
     state_root = default_state_root(project)
@@ -185,7 +249,7 @@ def register_project(
 def register_auto_project(raw_project_dir: str | Path | None = None, *, cwd: str | Path | None = None) -> dict[str, Any] | None:
     start = Path(raw_project_dir or cwd or Path.cwd()).expanduser().resolve()
     git_root = find_git_root(start)
-    if git_root is None:
+    if git_root is None or not is_eligible_auto_project_dir(git_root):
         return None
     project_id = project_id_for_path(git_root)
     return register_project(
@@ -206,7 +270,11 @@ def load_project_registry() -> dict[str, Any]:
         return {"schema_version": 1, "projects": []}
     if not isinstance(data, dict):
         return {"schema_version": 1, "projects": []}
-    projects = [normalize_project_record(item) for item in data.get("projects", []) if isinstance(item, dict)]
+    projects = [
+        normalize_project_record(item)
+        for item in data.get("projects", [])
+        if isinstance(item, dict) and should_keep_registry_record(item)
+    ]
     return {
         "schema_version": data.get("schema_version", 1),
         "updated_at": data.get("updated_at"),
@@ -220,13 +288,22 @@ def update_project_registry_records(records: list[dict[str, Any]]) -> dict[str, 
         "schema_version": 1,
         "updated_at": now,
         "projects": sorted(
-            [normalize_project_record(record) for record in records],
+            [
+                normalize_project_record(record)
+                for record in records
+                if should_keep_registry_record(record)
+            ],
             key=lambda item: str(item.get("last_seen_at", "")),
             reverse=True,
         ),
     }
     save_project_registry(registry)
     return registry
+
+
+def should_keep_registry_record(record: dict[str, Any]) -> bool:
+    project_dir = Path(str(record.get("project_dir") or "."))
+    return not is_disallowed_project_dir(project_dir) and not is_ignored_project_dir(project_dir)
 
 
 def prune_unavailable_projects(*, unavailable_days: int) -> dict[str, Any]:
