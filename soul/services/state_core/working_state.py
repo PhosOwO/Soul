@@ -10,6 +10,8 @@ from typing import Any, Literal, cast
 from soul.services.shared.constants import (
     PATCH_STATUS_NEEDS_REVIEW,
     STATE_KIND_ACCEPTED_BELIEF,
+    STATE_KIND_ACTIVE_CONSTRAINT,
+    STATE_KIND_OPEN_QUESTION,
     WORKING_STATUS_CONFLICT_NEEDS_REVIEW,
     WORKING_STATUS_EXPIRED,
     WORKING_STATUS_PROMOTED,
@@ -29,12 +31,8 @@ from soul.services.state_core.state_projection import state_item_matches_task
 from soul.services.state_core.state_store import append_patch_proposal, brain_dir, load_state, utc_now
 from soul.services.state_core.working_state_policy import (
     DEFAULT_WORKING_EXPIRY,
-    DEFAULT_WORKING_REASON,
     DEFAULT_WORKING_REVIEW_AFTER,
-    DEFAULT_WORKING_SCOPE,
     CONFLICT_NEGATION_SIGNALS,
-    EPISODIC_PREFIXES,
-    WORKING_CHANGE_SIGNALS,
     WORKING_REASON_MAX_LENGTH,
     WORKING_SCOPE_MAX_LENGTH,
     WORKING_STATEMENT_MAX_LENGTH,
@@ -44,6 +42,26 @@ from soul.services.state_core.working_state_policy import (
 
 DEFAULT_WORKING_EVENTS_NAME = "working_events.jsonl"
 DEFAULT_WORKING_STATE_NAME = "working_state.json"
+WORKING_KIND_PROJECT_FACT = "project_fact"
+WORKING_KIND_CONSTRAINT = "constraint"
+WORKING_KIND_PREFERENCE = "preference"
+WORKING_KIND_VERIFICATION_RESULT = "verification_result"
+WORKING_KIND_OPEN_QUESTION = "open_question"
+WORKING_STATE_KINDS = {
+    WORKING_KIND_PROJECT_FACT,
+    WORKING_KIND_CONSTRAINT,
+    WORKING_KIND_PREFERENCE,
+    WORKING_KIND_VERIFICATION_RESULT,
+    WORKING_KIND_OPEN_QUESTION,
+}
+WORKING_KIND_TO_STATE_KIND = {
+    WORKING_KIND_PROJECT_FACT: STATE_KIND_ACCEPTED_BELIEF,
+    WORKING_KIND_CONSTRAINT: STATE_KIND_ACTIVE_CONSTRAINT,
+    WORKING_KIND_PREFERENCE: STATE_KIND_ACCEPTED_BELIEF,
+    WORKING_KIND_VERIFICATION_RESULT: STATE_KIND_ACCEPTED_BELIEF,
+    WORKING_KIND_OPEN_QUESTION: STATE_KIND_OPEN_QUESTION,
+}
+WORKING_CONFIDENCE_MINIMUM = 0.5
 
 WorkingReviewBucket = Literal["none", "ready_to_confirm", "needs_review"]
 
@@ -109,13 +127,17 @@ def route_working_state_from_evidence(
     explicit = evidence.get("working_state")
     if isinstance(explicit, dict):
         route = str(explicit.get("route") or "working_state")
+        if route == "no_state":
+            return {"route": "no_state", "reason": str(explicit.get("reason") or "Explicitly routed away from Working State.")}
         routed = {
             "route": route if route in {"no_state", "working_state"} else "no_state",
+            "kind": str(explicit.get("kind") or ""),
             "review_candidate": bool(explicit.get("review_candidate", True)),
             "review_card": bool(explicit.get("review_card", False)),
             "statement": compact_text(str(explicit.get("statement") or ""), WORKING_STATEMENT_MAX_LENGTH),
             "reason": compact_text(str(explicit.get("reason") or ""), WORKING_REASON_MAX_LENGTH),
             "scope": compact_text(str(explicit.get("scope") or evidence.get("task") or ""), WORKING_SCOPE_MAX_LENGTH),
+            "confidence": float_value(explicit.get("confidence"), default=-1.0),
             "expires": str(explicit.get("expires") or DEFAULT_WORKING_EXPIRY),
             "review_after": str(explicit.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER),
         }
@@ -135,6 +157,12 @@ def route_working_state_from_evidence(
     reason = compact_text(str(routed.get("reason") or ""), WORKING_REASON_MAX_LENGTH)
     if not statement or not scope or not reason:
         return {"route": "no_state", "reason": "Working State requires statement, reason, and scope."}
+    kind = str(routed.get("kind") or "")
+    if kind not in WORKING_STATE_KINDS:
+        return {"route": "no_state", "reason": "Working State requires a valid kind."}
+    confidence = float_value(routed.get("confidence"), default=-1.0)
+    if confidence < WORKING_CONFIDENCE_MINIMUM or confidence > 1.0:
+        return {"route": "no_state", "reason": "Working State requires confidence between 0.5 and 1.0."}
 
     current_state = state or load_state(project_dir)
     duplicate_id = duplicate_state_item_id(current_state, statement)
@@ -144,11 +172,13 @@ def route_working_state_from_evidence(
     conflicts = accepted_state_conflicts(current_state, statement)
     return {
         "route": "working_state",
+        "kind": kind,
         "review_candidate": bool(routed.get("review_candidate", True)),
         "review_card": bool(routed.get("review_card", False)),
         "statement": statement,
         "reason": reason,
         "scope": scope,
+        "confidence": confidence,
         "expires_at": resolve_expiry(str(routed.get("expires") or DEFAULT_WORKING_EXPIRY)),
         "review_after": resolve_review_after(str(routed.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER)),
         "evidence_refs": refs,
@@ -158,64 +188,7 @@ def route_working_state_from_evidence(
 
 
 def infer_working_route(evidence: dict[str, Any]) -> dict[str, Any]:
-    text = evidence_text(evidence)
-    if not text:
-        return {"route": "no_state", "reason": "No evidence text to route."}
-    if looks_episodic(text):
-        return {"route": "no_state", "reason": "Evidence describes an episode without a working assumption."}
-
-    statement = extract_working_statement(text)
-    if not statement:
-        return {"route": "no_state", "reason": "No working-state change detected."}
-
-    return {
-        "route": "working_state",
-        "review_candidate": True,
-        "statement": statement,
-        "reason": DEFAULT_WORKING_REASON,
-        "scope": compact_text(str(evidence.get("task") or evidence.get("source") or DEFAULT_WORKING_SCOPE), WORKING_SCOPE_MAX_LENGTH),
-        "expires": DEFAULT_WORKING_EXPIRY,
-        "review_after": DEFAULT_WORKING_REVIEW_AFTER,
-    }
-
-
-def evidence_text(evidence: dict[str, Any]) -> str:
-    parts = [
-        str(evidence.get("summary") or ""),
-        str(evidence.get("content") or ""),
-        str(evidence.get("outcome") or ""),
-    ]
-    seen: set[str] = set()
-    unique_parts: list[str] = []
-    for part in (part.strip() for part in parts if part and part.strip()):
-        if part in seen:
-            continue
-        seen.add(part)
-        unique_parts.append(part)
-    return " ".join(unique_parts)
-
-
-def looks_episodic(text: str) -> bool:
-    lowered = text.lower().strip()
-    return lowered.startswith(EPISODIC_PREFIXES) and not contains_working_change_signal(text)
-
-
-def contains_working_change_signal(text: str) -> bool:
-    lowered = text.lower()
-    return any(signal in lowered for signal in WORKING_CHANGE_SIGNALS)
-
-
-def extract_working_statement(text: str) -> str:
-    normalized = " ".join(text.replace("\n", " ").split())
-    sentences = [
-        sentence.strip(" -")
-        for sentence in re.split(r"(?<=[.!?。！？])\s+|;\s+|；\s+", normalized)
-        if sentence.strip(" -")
-    ]
-    selected = [sentence for sentence in sentences if contains_working_change_signal(sentence)]
-    if not selected and contains_working_change_signal(normalized):
-        selected = [normalized]
-    return compact_text(" ".join(selected[:2]), WORKING_STATEMENT_MAX_LENGTH)
+    return {"route": "no_state", "reason": "Working State requires an explicit structured candidate."}
 
 
 def resolve_expiry(raw: str) -> str:
@@ -246,6 +219,15 @@ def resolve_review_after(raw: str) -> str:
         return raw
     except ValueError:
         return now.isoformat().replace("+00:00", "Z")
+
+
+def float_value(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def duplicate_state_item_id(state: StateDoc, statement: str) -> str:
@@ -318,9 +300,11 @@ def working_item_from_route(route: dict[str, Any], evidence: dict[str, Any]) -> 
     return {
         "id": item_id,
         "status": str(route.get("status") or WORKING_STATUS_WORKING),
+        "kind": str(route.get("kind") or WORKING_KIND_PROJECT_FACT),
         "statement": statement,
         "reason": str(route.get("reason") or ""),
         "scope": str(route.get("scope") or ""),
+        "confidence": float_value(route.get("confidence"), default=0.75),
         "review_candidate": bool(route.get("review_candidate", True)),
         "review_card": bool(route.get("review_card", False)),
         "evidence_refs": cast(list[dict[str, Any]], route.get("evidence_refs") or []),
@@ -537,11 +521,11 @@ def promote_working_item(project_dir: Path | None, working_id: str, *, confirmed
         "evidence_refs": item.get("evidence_refs") or [],
         "state_item": {
             "id": stable_state_item_id(str(item.get("statement") or "")),
-            "kind": infer_state_kind(str(item.get("statement") or "")) or STATE_KIND_ACCEPTED_BELIEF,
+            "kind": accepted_state_kind_for_working_item(item),
             "statement": item.get("statement") or "",
             "status": PATCH_STATUS_NEEDS_REVIEW,
             "priority": infer_priority(str(item.get("statement") or "")),
-            "confidence": 0.65,
+            "confidence": float_value(item.get("confidence"), default=0.65),
             "why_remember": item.get("reason") or why_remember_for_statement(str(item.get("statement") or "")),
         },
     }
@@ -562,6 +546,11 @@ def promote_working_item(project_dir: Path | None, working_id: str, *, confirmed
         project,
     )
     return {"working_item": item, "patch_proposal": proposal}
+
+
+def accepted_state_kind_for_working_item(item: WorkingStateItem) -> str:
+    kind = str(item.get("kind") or "")
+    return WORKING_KIND_TO_STATE_KIND.get(kind) or infer_state_kind(str(item.get("statement") or "")) or STATE_KIND_ACCEPTED_BELIEF
 
 
 def expire_working_item(project_dir: Path | None, working_id: str, *, reason: str = "") -> WorkingStateItem:

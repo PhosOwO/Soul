@@ -98,9 +98,11 @@ def create_review_mock_project(target_dir: Path, *, reset: bool = False) -> dict
             "evidence_refs": refs,
             "working_state": {
                 "route": "working_state",
+                "kind": "project_fact",
                 "statement": "Review Card UI should show two decision buckets: Ready to Confirm and Needs Review.",
                 "reason": "This matches the low-decision-cost interaction model.",
                 "scope": "Review Card UI",
+                "confidence": 0.8,
                 "review_after": (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
                 "review_card": True,
             },
@@ -116,9 +118,11 @@ def create_review_mock_project(target_dir: Path, *, reset: bool = False) -> dict
             "evidence_refs": refs,
             "working_state": {
                 "route": "working_state",
+                "kind": "constraint",
                 "statement": "Do not show every due Working State item as a Review Card decision.",
                 "reason": "Plain due Working State without conflict or explicit review_card flag is too noisy.",
                 "scope": "Soul Review Card UX",
+                "confidence": 0.8,
                 "review_after": (datetime.now(UTC) - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
             },
         },

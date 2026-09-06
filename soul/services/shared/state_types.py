@@ -57,6 +57,7 @@ class EvidencePayload(TypedDict, total=False):
     operations: list["PatchOperation"]
     state_item: StateItem
     state_items: list[StateItem]
+    working_state: "WorkingStateCandidate"
 
 
 class KnowledgePoint(TypedDict):
@@ -105,9 +106,11 @@ class PatchProposal(TypedDict):
 class WorkingStateItem(TypedDict, total=False):
     id: str
     status: str
+    kind: str
     statement: str
     reason: str
     scope: str
+    confidence: float
     review_candidate: bool
     review_card: bool
     evidence_refs: list[dict[str, Any]]
@@ -119,6 +122,19 @@ class WorkingStateItem(TypedDict, total=False):
     review_after: str
     supersedes: list[str]
     conflicts_with: list[str]
+
+
+class WorkingStateCandidate(TypedDict, total=False):
+    route: str
+    kind: str
+    statement: str
+    reason: str
+    scope: str
+    confidence: float
+    review_candidate: bool
+    review_card: bool
+    expires: str
+    review_after: str
 
 
 class WorkingStateDoc(TypedDict):
