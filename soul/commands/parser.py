@@ -649,7 +649,7 @@ def scan_notify_command(args: argparse.Namespace) -> None:
         if args.scan
         else load_review_index()
     )
-    result = notify_review_index(index, dry_run=args.dry_run)
+    result = notify_review_index(index, dry_run=args.dry_run, review_host=args.review_host, review_port=args.review_port)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -1879,6 +1879,8 @@ def build_parser() -> argparse.ArgumentParser:
     scan_notify.add_argument("--scan", action="store_true", help="Refresh the global review index before notifying.")
     scan_notify.add_argument("--limit", type=int, default=5)
     scan_notify.add_argument("--near-expiry-hours", type=int, default=4)
+    scan_notify.add_argument("--review-host", default="127.0.0.1", help="Host for the Review page opened from notifications.")
+    scan_notify.add_argument("--review-port", type=int, default=8765, help="Port for the Review page opened from notifications.")
     scan_notify.set_defaults(func=scan_notify_command)
 
     service_parser = subparsers.add_parser("service", help="Manage the user-level Soul scan background service.")

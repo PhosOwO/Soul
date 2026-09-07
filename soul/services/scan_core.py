@@ -452,6 +452,8 @@ def notify_review_index(
     dry_run: bool = False,
     now: datetime | None = None,
     platform_name: str | None = None,
+    review_host: str = "127.0.0.1",
+    review_port: int = 8765,
 ) -> dict[str, Any]:
     current_index = index or load_review_index()
     current_time = now or datetime.now(UTC)
@@ -483,8 +485,9 @@ def notify_review_index(
             }
         if candidates:
             title, body = format_notification_message(candidates)
+            action = review_notification_action(candidates, host=review_host, port=review_port)
             try:
-                delivery = send_desktop_notification(title, body, platform_name=platform_name)
+                delivery = send_desktop_notification(title, body, platform_name=platform_name, action=action)
             except Exception as exc:
                 delivery = {
                     "attempted": True,
@@ -650,8 +653,27 @@ def format_notification_message(candidates: list[dict[str, Any]]) -> tuple[str, 
     return "Soul Review", f"{len(candidates)} projects have {queue_total} queued jobs waiting"
 
 
-def send_desktop_notification(title: str, body: str, *, platform_name: str | None = None) -> dict[str, Any]:
-    return notifier_for_platform(platform_name).send(title, body)
+def review_notification_action(candidates: list[dict[str, Any]], *, host: str, port: int) -> dict[str, Any]:
+    project_dir = "."
+    if len(candidates) == 1 and candidates[0].get("project_dir"):
+        project_dir = str(candidates[0]["project_dir"])
+    return {
+        "kind": "review",
+        "project_dir": project_dir,
+        "host": host,
+        "port": port,
+        "url": f"http://{host}:{port}/review",
+    }
+
+
+def send_desktop_notification(
+    title: str,
+    body: str,
+    *,
+    platform_name: str | None = None,
+    action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return notifier_for_platform(platform_name).send(title, body, action=action)
 
 
 def parse_utc_time(value: Any) -> datetime | None:

@@ -4,7 +4,7 @@ from typing import Any
 
 
 class WindowsNotifier:
-    def send(self, title: str, body: str) -> dict[str, Any]:
+    def send(self, title: str, body: str, *, action: dict[str, Any] | None = None) -> dict[str, Any]:
         return {
             "attempted": False,
             "delivered": False,
