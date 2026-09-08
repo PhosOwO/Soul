@@ -17,7 +17,14 @@ from soul.services.shared.constants import (
 from soul.services.shared.state_types import PatchProposal, WorkingStateItem
 from soul.services.shared.text import compact_text
 from soul.services.state_core.state_store import load_patch_proposals, load_state, utc_now
-from soul.services.state_core.working_state import WorkingStateLifecycle, classify_working_item_lifecycle, load_working_state
+from soul.services.state_core.working_state import (
+    WORKING_CATEGORY_CANDIDATE_CONSTRAINT,
+    WORKING_CATEGORY_CONFLICT,
+    WorkingStateLifecycle,
+    classify_working_item_lifecycle,
+    expire_due_working_items,
+    load_working_state,
+)
 
 
 CandidateBucket = Literal["ready_to_confirm", "needs_review"]
@@ -35,6 +42,7 @@ def build_review_card(
     project = project_dir or Path.cwd()
     state = load_state(project, project_name=project_name or project.name)
     current_time = now or datetime.now(UTC)
+    expire_due_working_items(project, now=current_time, reason="Review Card scan expired stale Working State.")
     candidates = review_candidates(project, near_expiry_hours=near_expiry_hours, now=current_time)
     candidates.sort(key=candidate_sort_key, reverse=True)
     selected = candidates[:limit]
@@ -157,10 +165,9 @@ def proposal_evidence(proposal: PatchProposal) -> dict[str, Any]:
 
 
 def patch_actions(recommended_action: str) -> list[str]:
-    actions = ["accept", "edit", "reject", "evidence"]
     if recommended_action == "reject":
-        return ["reject", "edit", "accept", "evidence"]
-    return actions
+        return ["reject", "accept"]
+    return ["accept", "reject"]
 
 
 def working_state_candidates(
@@ -175,12 +182,20 @@ def working_state_candidates(
         lifecycle = classify_working_item_lifecycle(item, near_expiry_hours=near_expiry_hours, now=now)
         if lifecycle.status not in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
             continue
-        if not lifecycle.review_candidate:
-            continue
-        if lifecycle.review_bucket == "none":
+        if not should_show_working_item_in_review(item, lifecycle):
             continue
         candidates.append(working_candidate(item, lifecycle))
     return candidates
+
+
+def should_show_working_item_in_review(item: WorkingStateItem, lifecycle: WorkingStateLifecycle) -> bool:
+    if not lifecycle.review_candidate or lifecycle.review_bucket == "none":
+        return False
+    if lifecycle.status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
+        return True
+    if lifecycle.review_card:
+        return True
+    return str(item.get("category") or "") in {WORKING_CATEGORY_CANDIDATE_CONSTRAINT, WORKING_CATEGORY_CONFLICT}
 
 
 def working_candidate(
@@ -201,6 +216,7 @@ def working_candidate(
         "score": lifecycle.score,
         "created_at": item.get("created_at", ""),
         "updated_at": item.get("updated_at", ""),
+        "category": item.get("category", ""),
         "expires_at": item.get("expires_at", ""),
         "review_after": item.get("review_after", ""),
         "lifecycle": {
@@ -211,6 +227,7 @@ def working_candidate(
             "near_expiry": lifecycle.near_expiry,
             "review_candidate": lifecycle.review_candidate,
             "review_card": lifecycle.review_card,
+            "category": item.get("category", ""),
         },
         "conflicts_with": item.get("conflicts_with", []),
         "evidence": {
@@ -218,7 +235,7 @@ def working_candidate(
             "refs": item.get("evidence_refs", []),
             "source": item.get("source", ""),
         },
-        "actions": ["accept", "edit", "reject", "snooze", "evidence"],
+        "actions": ["accept", "reject"],
     }
 
 

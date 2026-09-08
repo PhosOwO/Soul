@@ -107,6 +107,7 @@ class WorkingStateItem(TypedDict, total=False):
     id: str
     status: str
     kind: str
+    category: str
     statement: str
     reason: str
     scope: str
@@ -127,6 +128,7 @@ class WorkingStateItem(TypedDict, total=False):
 class WorkingStateCandidate(TypedDict, total=False):
     route: str
     kind: str
+    category: str
     statement: str
     reason: str
     scope: str

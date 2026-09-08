@@ -23,7 +23,7 @@ from soul.services.notifications.macos import applescript_string
 from soul.services.project_resolver import load_project_registry, projects_registry_path, state_owner_dir_from_record, update_project_registry_records
 from soul.services.state_core.review.card import build_review_card
 from soul.services.state_core.state_store import utc_now
-from soul.services.state_core.working_state import classify_working_item_lifecycle, load_working_state
+from soul.services.state_core.working_state import classify_working_item_lifecycle, expire_due_working_items, load_working_state
 from soul.services.shared.state_types import WorkingStateItem
 
 
@@ -229,6 +229,8 @@ def scan_project_record(
         }
     try:
         project_name = str(record.get("project_name") or project_dir.name)
+        scan_time = parse_utc_time(now) or datetime.now(UTC)
+        expire_due_working_items(state_owner_dir, now=scan_time, reason="Project scan expired stale Working State.")
         card = build_review_card(
             state_owner_dir,
             limit=limit,
@@ -238,7 +240,6 @@ def scan_project_record(
         )
         queue = queue_status(state_owner_dir)
         counts = card.get("counts", {})
-        scan_time = parse_utc_time(now) or datetime.now(UTC)
         lifecycle = working_lifecycle_summary(
             state_owner_dir,
             project_name=project_name,

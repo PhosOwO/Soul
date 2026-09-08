@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shlex
 import subprocess
 import sys
@@ -11,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 
-NOTIFICATION_BINARY_NAME = "SoulNotifier"
+NOTIFICATION_APP_NAME = "SoulNotifier.app"
+NOTIFICATION_EXECUTABLE_NAME = "SoulNotifier"
 NOTIFICATION_WAIT_SECONDS = 120
 
 
@@ -19,8 +21,7 @@ class MacOSNotifier:
     def send(self, title: str, body: str, *, action: dict[str, Any] | None = None) -> dict[str, Any]:
         if action and action.get("kind") == "review":
             result = self.send_clickable_review_notification(title, body, action=action)
-            if result.get("delivered"):
-                return result
+            return result
         script = f"display notification {applescript_string(body)} with title {applescript_string(title)}"
         try:
             completed = subprocess.run(["osascript", "-e", script], check=False, capture_output=True, text=True)
@@ -33,10 +34,13 @@ class MacOSNotifier:
 
     def send_clickable_review_notification(self, title: str, body: str, *, action: dict[str, Any]) -> dict[str, Any]:
         try:
-            binary_path = ensure_notification_binary()
-            subprocess.Popen(
+            app_path = ensure_notification_app()
+            completed = subprocess.run(
                 [
-                    str(binary_path),
+                    "open",
+                    "-gj",
+                    str(app_path),
+                    "--args",
                     "--title",
                     title,
                     "--body",
@@ -46,9 +50,9 @@ class MacOSNotifier:
                     "--timeout",
                     str(NOTIFICATION_WAIT_SECONDS),
                 ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                check=False,
+                capture_output=True,
+                text=True,
             )
         except OSError as exc:
             return {
@@ -57,6 +61,15 @@ class MacOSNotifier:
                 "platform": "darwin",
                 "capability": "clickable_review_notification",
                 "error": str(exc),
+            }
+        if completed.returncode != 0:
+            error = (completed.stderr or completed.stdout or "").strip()
+            return {
+                "attempted": True,
+                "delivered": False,
+                "platform": "darwin",
+                "capability": "clickable_review_notification",
+                "error": error,
             }
         return {
             "attempted": True,
@@ -67,25 +80,47 @@ class MacOSNotifier:
         }
 
 
-def ensure_notification_binary() -> Path:
-    binary_path = Path(tempfile.gettempdir()) / "soulkit" / NOTIFICATION_BINARY_NAME
-    source_path = binary_path.with_suffix(".swift")
+def ensure_notification_app() -> Path:
+    app_path = Path(tempfile.gettempdir()) / "soulkit" / NOTIFICATION_APP_NAME
+    executable_path = app_path / "Contents" / "MacOS" / NOTIFICATION_EXECUTABLE_NAME
+    source_path = app_path.parent / f"{NOTIFICATION_EXECUTABLE_NAME}.swift"
+    source_stamp_path = app_path / "Contents" / "Resources" / "soul-notifier.swift"
     source = notification_binary_source()
-    if binary_path.exists() and source_path.exists():
+    if executable_path.exists() and source_stamp_path.exists():
         try:
-            if source_path.read_text(encoding="utf-8") == source:
-                return binary_path
+            if source_stamp_path.read_text(encoding="utf-8") == source:
+                return app_path
         except OSError:
             pass
-    binary_path.parent.mkdir(parents=True, exist_ok=True)
+    executable_path.parent.mkdir(parents=True, exist_ok=True)
+    source_stamp_path.parent.mkdir(parents=True, exist_ok=True)
     source_path.write_text(source, encoding="utf-8")
-    if binary_path.exists():
-        binary_path.unlink()
-    completed = subprocess.run(["swiftc", str(source_path), "-o", str(binary_path)], check=False, capture_output=True, text=True)
+    if executable_path.exists():
+        executable_path.unlink()
+    completed = subprocess.run(["swiftc", str(source_path), "-o", str(executable_path)], check=False, capture_output=True, text=True)
     if completed.returncode != 0:
         error = (completed.stderr or completed.stdout or "").strip()
         raise OSError(error or "failed to compile Soul notification helper")
-    return binary_path
+    write_notification_app_info_plist(app_path)
+    source_stamp_path.write_text(source, encoding="utf-8")
+    return app_path
+
+
+def write_notification_app_info_plist(app_path: Path) -> None:
+    info = {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleExecutable": NOTIFICATION_EXECUTABLE_NAME,
+        "CFBundleIdentifier": "com.soulkit.review-notifier",
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "Soul Review",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+        "LSMinimumSystemVersion": "11.0",
+        "LSUIElement": True,
+    }
+    with (app_path / "Contents" / "Info.plist").open("wb") as stream:
+        plistlib.dump(info, stream, sort_keys=False)
 
 
 def notification_binary_source() -> str:

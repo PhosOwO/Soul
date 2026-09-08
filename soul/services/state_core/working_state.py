@@ -62,6 +62,32 @@ WORKING_KIND_TO_STATE_KIND = {
     WORKING_KIND_OPEN_QUESTION: STATE_KIND_OPEN_QUESTION,
 }
 WORKING_CONFIDENCE_MINIMUM = 0.5
+WORKING_CATEGORY_EPHEMERAL_TRACE = "ephemeral_trace"
+WORKING_CATEGORY_SHORT_LIVED_ASSUMPTION = "short_lived_assumption"
+WORKING_CATEGORY_CANDIDATE_RULE = "candidate_rule"
+WORKING_CATEGORY_CANDIDATE_PREFERENCE = "candidate_preference"
+WORKING_CATEGORY_CANDIDATE_CONSTRAINT = "candidate_constraint"
+WORKING_CATEGORY_CONFLICT = "conflict"
+WORKING_STATE_CATEGORIES = {
+    WORKING_CATEGORY_EPHEMERAL_TRACE,
+    WORKING_CATEGORY_SHORT_LIVED_ASSUMPTION,
+    WORKING_CATEGORY_CANDIDATE_RULE,
+    WORKING_CATEGORY_CANDIDATE_PREFERENCE,
+    WORKING_CATEGORY_CANDIDATE_CONSTRAINT,
+    WORKING_CATEGORY_CONFLICT,
+}
+WORKING_CATEGORY_DEFAULT_EXPIRY = {
+    WORKING_CATEGORY_EPHEMERAL_TRACE: "2h",
+    WORKING_CATEGORY_SHORT_LIVED_ASSUMPTION: "8h",
+    WORKING_CATEGORY_CANDIDATE_RULE: "24h",
+    WORKING_CATEGORY_CANDIDATE_PREFERENCE: "24h",
+    WORKING_CATEGORY_CANDIDATE_CONSTRAINT: "24h",
+    WORKING_CATEGORY_CONFLICT: "24h",
+}
+WORKING_REVIEW_CARD_CATEGORIES = {
+    WORKING_CATEGORY_CANDIDATE_CONSTRAINT,
+    WORKING_CATEGORY_CONFLICT,
+}
 
 WorkingReviewBucket = Literal["none", "ready_to_confirm", "needs_review"]
 
@@ -132,14 +158,15 @@ def route_working_state_from_evidence(
         routed = {
             "route": route if route in {"no_state", "working_state"} else "no_state",
             "kind": str(explicit.get("kind") or ""),
-            "review_candidate": bool(explicit.get("review_candidate", True)),
+            "category": str(explicit.get("category") or ""),
+            "review_candidate": explicit.get("review_candidate") if "review_candidate" in explicit else None,
             "review_card": bool(explicit.get("review_card", False)),
             "statement": compact_text(str(explicit.get("statement") or ""), WORKING_STATEMENT_MAX_LENGTH),
             "reason": compact_text(str(explicit.get("reason") or ""), WORKING_REASON_MAX_LENGTH),
             "scope": compact_text(str(explicit.get("scope") or evidence.get("task") or ""), WORKING_SCOPE_MAX_LENGTH),
             "confidence": float_value(explicit.get("confidence"), default=-1.0),
-            "expires": str(explicit.get("expires") or DEFAULT_WORKING_EXPIRY),
-            "review_after": str(explicit.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER),
+            "expires": explicit.get("expires"),
+            "review_after": explicit.get("review_after"),
         }
     else:
         routed = infer_working_route(evidence)
@@ -170,19 +197,35 @@ def route_working_state_from_evidence(
         return {"route": "no_state", "reason": f"Already represented in accepted state: {duplicate_id}."}
 
     conflicts = accepted_state_conflicts(current_state, statement)
+    status = WORKING_STATUS_CONFLICT_NEEDS_REVIEW if conflicts else WORKING_STATUS_WORKING
+    review_card = bool(routed.get("review_card", False))
+    category = working_category(
+        kind=kind,
+        raw_category=str(routed.get("category") or ""),
+        status=status,
+        review_card=review_card,
+    )
+    review_candidate = working_review_candidate(
+        category=category,
+        review_card=review_card,
+        explicit_value=routed.get("review_candidate"),
+    )
+    expires = str(routed.get("expires") or default_expiry_for_working_category(category))
+    review_after = str(routed.get("review_after") or default_review_after_for_working_category(category, review_card=review_card))
     return {
         "route": "working_state",
         "kind": kind,
-        "review_candidate": bool(routed.get("review_candidate", True)),
-        "review_card": bool(routed.get("review_card", False)),
+        "category": category,
+        "review_candidate": review_candidate,
+        "review_card": review_card,
         "statement": statement,
         "reason": reason,
         "scope": scope,
         "confidence": confidence,
-        "expires_at": resolve_expiry(str(routed.get("expires") or DEFAULT_WORKING_EXPIRY)),
-        "review_after": resolve_review_after(str(routed.get("review_after") or DEFAULT_WORKING_REVIEW_AFTER)),
+        "expires_at": resolve_expiry(expires),
+        "review_after": resolve_review_after(review_after),
         "evidence_refs": refs,
-        "status": WORKING_STATUS_CONFLICT_NEEDS_REVIEW if conflicts else WORKING_STATUS_WORKING,
+        "status": status,
         "conflicts_with": conflicts,
     }
 
@@ -191,9 +234,46 @@ def infer_working_route(evidence: dict[str, Any]) -> dict[str, Any]:
     return {"route": "no_state", "reason": "Working State requires an explicit structured candidate."}
 
 
+def working_category(*, kind: str, raw_category: str, status: str, review_card: bool) -> str:
+    if status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
+        return WORKING_CATEGORY_CONFLICT
+    if raw_category in WORKING_STATE_CATEGORIES:
+        return raw_category
+    if kind == WORKING_KIND_CONSTRAINT:
+        return WORKING_CATEGORY_CANDIDATE_CONSTRAINT
+    if kind == WORKING_KIND_PREFERENCE:
+        return WORKING_CATEGORY_CANDIDATE_PREFERENCE
+    if review_card:
+        return WORKING_CATEGORY_CANDIDATE_RULE
+    return WORKING_CATEGORY_SHORT_LIVED_ASSUMPTION
+
+
+def working_review_candidate(*, category: str, review_card: bool, explicit_value: Any) -> bool:
+    if category == WORKING_CATEGORY_CONFLICT:
+        return True
+    if explicit_value is not None:
+        return bool(explicit_value)
+    return review_card or category in WORKING_REVIEW_CARD_CATEGORIES
+
+
+def default_expiry_for_working_category(category: str) -> str:
+    return WORKING_CATEGORY_DEFAULT_EXPIRY.get(category, DEFAULT_WORKING_EXPIRY)
+
+
+def default_review_after_for_working_category(category: str, *, review_card: bool) -> str:
+    if review_card or category in WORKING_REVIEW_CARD_CATEGORIES:
+        return "now"
+    return DEFAULT_WORKING_REVIEW_AFTER
+
+
 def resolve_expiry(raw: str) -> str:
     now = datetime.now(UTC).replace(microsecond=0)
-    if raw == DEFAULT_WORKING_EXPIRY:
+    if raw in {"", "none", "never"}:
+        return ""
+    duration = parse_duration(raw)
+    if duration is not None:
+        return (now + duration).isoformat().replace("+00:00", "Z")
+    if raw == "end_of_day":
         local_now = datetime.now().astimezone().replace(microsecond=0)
         end = local_now.replace(hour=22, minute=0, second=0)
         if local_now >= end:
@@ -208,7 +288,14 @@ def resolve_expiry(raw: str) -> str:
 
 def resolve_review_after(raw: str) -> str:
     now = datetime.now(UTC).replace(microsecond=0)
-    if raw == DEFAULT_WORKING_REVIEW_AFTER:
+    if raw in {"", "none", "never"}:
+        return ""
+    if raw == "now":
+        return now.isoformat().replace("+00:00", "Z")
+    duration = parse_duration(raw)
+    if duration is not None:
+        return (now + duration).isoformat().replace("+00:00", "Z")
+    if raw == "end_of_day":
         local_now = datetime.now().astimezone().replace(microsecond=0)
         review_at = local_now.replace(hour=22, minute=0, second=0)
         if local_now >= review_at:
@@ -219,6 +306,19 @@ def resolve_review_after(raw: str) -> str:
         return raw
     except ValueError:
         return now.isoformat().replace("+00:00", "Z")
+
+
+def parse_duration(raw: str) -> timedelta | None:
+    match = re.fullmatch(r"\s*(\d+)\s*([mhd])\s*", raw.lower())
+    if match is None:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if unit == "m":
+        return timedelta(minutes=amount)
+    if unit == "h":
+        return timedelta(hours=amount)
+    return timedelta(days=amount)
 
 
 def float_value(value: Any, default: float = 0.0) -> float:
@@ -301,6 +401,7 @@ def working_item_from_route(route: dict[str, Any], evidence: dict[str, Any]) -> 
         "id": item_id,
         "status": str(route.get("status") or WORKING_STATUS_WORKING),
         "kind": str(route.get("kind") or WORKING_KIND_PROJECT_FACT),
+        "category": str(route.get("category") or WORKING_CATEGORY_SHORT_LIVED_ASSUMPTION),
         "statement": statement,
         "reason": str(route.get("reason") or ""),
         "scope": str(route.get("scope") or ""),
@@ -369,31 +470,30 @@ def classify_working_item_lifecycle(
     review_due = is_working_item_review_due(item, now=current_time)
     near_expiry = is_working_item_near_expiry(item, hours=near_expiry_hours, now=current_time)
     review_card = bool(item.get("review_card", False))
+    category = str(item.get("category") or "")
     active_for_context = status == WORKING_STATUS_WORKING and not expired
 
     review_bucket: WorkingReviewBucket = "none"
     recommended_action = ""
     reason = ""
     score = 0
-    if review_candidate and status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
+    if expired and status in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
+        recommended_action = "expire"
+        reason = "Working State expired before it needed a user decision."
+    elif review_candidate and status == WORKING_STATUS_CONFLICT_NEEDS_REVIEW:
         review_bucket = "needs_review"
         recommended_action = "review"
         reason = "Working State conflicts with accepted state and should not silently affect future turns."
         score = 100
-    elif review_candidate and near_expiry and not review_due:
-        review_bucket = "needs_review"
-        recommended_action = "review"
-        reason = "Working State is close to expiry; decide whether to keep, accept, or reject it."
-        score = 70
     elif review_candidate and review_card and review_due:
         review_bucket = "ready_to_confirm"
         recommended_action = "accept"
         reason = "Working State was explicitly marked as worth confirming in the low-noise review card."
         score = 75
-    elif review_candidate and review_due:
+    elif review_candidate and category == WORKING_CATEGORY_CANDIDATE_CONSTRAINT and review_due:
         review_bucket = "needs_review"
-        recommended_action = "review"
-        reason = "Working State is due for review; decide whether to accept, reject, or snooze it."
+        recommended_action = "accept"
+        reason = "Candidate constraint may affect future agent behavior and needs an explicit keep or dismiss decision."
         score = 65
 
     return WorkingStateLifecycle(
@@ -413,6 +513,40 @@ def classify_working_item_lifecycle(
 
 def is_working_item_active(item: WorkingStateItem, *, now: datetime | None = None) -> bool:
     return classify_working_item_lifecycle(item, now=now).active_for_context
+
+
+def expire_due_working_items(
+    project_dir: Path | None = None,
+    *,
+    now: datetime | None = None,
+    reason: str = "Working State TTL elapsed.",
+) -> list[str]:
+    project = project_dir or Path.cwd()
+    doc = load_working_state(project)
+    current_time = now or datetime.now(UTC)
+    expired_ids: list[str] = []
+    for item in doc.get("items", []):
+        if item.get("status") not in {WORKING_STATUS_WORKING, WORKING_STATUS_CONFLICT_NEEDS_REVIEW}:
+            continue
+        if not is_working_item_expired(item, now=current_time):
+            continue
+        item["status"] = WORKING_STATUS_EXPIRED
+        item["updated_at"] = utc_now()
+        expired_ids.append(str(item.get("id") or ""))
+    if not expired_ids:
+        return []
+    doc["updated_at"] = utc_now()
+    save_working_state(doc, project)
+    append_working_event(
+        {
+            "event": WORKING_STATUS_EXPIRED,
+            "created_at": utc_now(),
+            "reason": reason,
+            "working_ids": expired_ids,
+        },
+        project,
+    )
+    return expired_ids
 
 
 def is_working_item_expired(item: WorkingStateItem, *, now: datetime | None = None) -> bool:
