@@ -41,7 +41,7 @@ from soul.services.shared.constants import (
 from soul.services.integrations.integration_runs import append_integration_run, latest_matching_run, read_integration_runs
 from soul.services.integrations.codex_workflow import ingest_codex_session
 from soul.services.integrations.importer import import_codex_session
-from soul.services.integrations.queue import drain_queue, queue_status
+from soul.services.integrations.queue import drain_queue, queue_status, requeue_blocked_jobs
 from soul.services.integrations.reflection import reflect_episode
 from soul.services.reme.runtime_config import resolve_reme_runtime_config, soul_home
 from soul.services.state_core.proposals import apply_patch_proposal, append_patch_status, edit_patch_proposal, propose_patch
@@ -83,6 +83,7 @@ def status_command(_: argparse.Namespace) -> None:
     integration_runs = read_integration_runs(Path.cwd(), limit=5)
     working_items = load_working_state(Path.cwd(), project_name=Path.cwd().name).get("items", [])[-5:]
     patches = read_recent_jsonl(Path.cwd() / ".soul" / "state" / "patch_proposals.jsonl", limit=5)
+    queue = queue_status(Path.cwd())
     print("Soul Status")
     print("")
     print(f"Project: {state.get('project', 'unknown')}")
@@ -109,10 +110,16 @@ def status_command(_: argparse.Namespace) -> None:
         print(f"- {patch.get('id', 'unknown')} [{patch.get('status', 'unknown')}] {patch.get('source', 'unknown')}")
     if not patches:
         print("- none")
+    print("")
+    print_queue_summary(queue)
+    if queue.blocked:
+        print("- action: fix the reported root cause, then run `soul queue retry-blocked --project-dir .`.")
 
 
 def context_command(args: argparse.Namespace) -> None:
-    print(format_state_context(load_state(), limit=args.limit))
+    from soul.services.state_core.state_store import load_state_markdown
+
+    print(load_state_markdown(limit=args.limit))
 
 
 def queue_status_command(args: argparse.Namespace) -> None:
@@ -154,6 +161,28 @@ def queue_drain_command(args: argparse.Namespace) -> None:
                 continue
             detail = f" {item.get('working_state_id')}" if item.get("working_state_id") else ""
             print(f"- {item.get('job_id', 'unknown')}: {item.get('status', 'unknown')}{detail}")
+
+
+def queue_retry_blocked_command(args: argparse.Namespace) -> None:
+    result = requeue_blocked_jobs(
+        Path(args.project_dir).resolve(),
+        job_ids=args.job_id or None,
+        reason=args.reason or "",
+    )
+    if result.get("locked"):
+        print("Soul queue worker is already running.")
+        return
+    requeued = result.get("requeued", [])
+    skipped = result.get("skipped", [])
+    print(f"Requeued blocked jobs: {len(requeued) if isinstance(requeued, list) else 0}")
+    if isinstance(requeued, list):
+        for job_id in requeued:
+            print(f"- {job_id}")
+    if isinstance(skipped, list) and skipped:
+        print("Skipped jobs:")
+        for item in skipped:
+            if isinstance(item, dict):
+                print(f"- {item.get('job_id', 'unknown')}: {item.get('reason', 'unknown')}")
 
 
 def hook_user_prompt_submit_command(args: argparse.Namespace) -> None:
@@ -825,6 +854,8 @@ def reme_doctor_command(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).expanduser().resolve()
     print_reme_preflight(project_dir, create_workspace=args.create_workspace)
     print_reme_workspace_layout_warnings(project_dir)
+    if args.probe:
+        print_reme_auto_memory_probe(project_dir)
 
 
 def traex_doctor_command(args: argparse.Namespace) -> None:
@@ -858,6 +889,9 @@ def traex_doctor_command(args: argparse.Namespace) -> None:
         print("- action: start a new TraeX turn in this project, then re-run `soul traex doctor --project-dir .`.")
     elif any(run.get("status") == "error" for run in hook_runs[:5]):
         print("- status: hooks executed, but recent errors were recorded.")
+    elif queue.blocked:
+        print("- status: hooks executed, but evidence processing is blocked.")
+        print("- action: fix the reported root cause, then run `soul queue retry-blocked --project-dir .`.")
     elif queue.queued or queue.failed_retryable:
         print("- status: hooks executed; queued evidence is waiting for background processing.")
         print("- action: run `soul queue drain --project-dir .` if it does not clear automatically.")
@@ -910,8 +944,6 @@ def print_reme_preflight(project_dir: Path, *, create_workspace: bool) -> bool:
         print(f"- status: {result.message}")
         if result.cli_path is None:
             print("- action: install ReMe or make sure the `reme` executable is on PATH.")
-        else:
-            print("- action: start ReMe with `reme start` before expecting Soul evidence writes.")
     print_reme_auto_memory_env(project_dir)
     return result.ok
 
@@ -933,6 +965,22 @@ def print_reme_auto_memory_env(project_dir: Path) -> bool:
         print("- action: run `soul reme init-config --scope global`, then fill in the generated file.")
         return False
     print("- status: ok")
+    return True
+
+
+def print_reme_auto_memory_probe(project_dir: Path) -> bool:
+    print("ReMe auto_memory probe:")
+    try:
+        result = ReMeCliAdapter(project_dir).probe_auto_memory()
+    except Exception as exc:
+        print("- status: failed")
+        print(f"- error: {compact_text(str(exc).replace(chr(10), ' '), 500)}")
+        print("- action: update the ReMe LLM config, then run `soul reme doctor --probe` again.")
+        return False
+    path = result.metadata.get("path") if isinstance(result.metadata, dict) else None
+    print("- status: ok")
+    if path:
+        print(f"- probe note: {path}")
     return True
 
 
@@ -1295,6 +1343,12 @@ def format_state_audit(audit: Mapping[str, Any]) -> str:
         f"- working items: {summary.get('working_items', 0)} ({summary.get('active_working_items', 0)} active)",
         f"- patch records: {summary.get('patch_records', 0)}",
         f"- latest patches: {summary.get('latest_patch_proposed', 0)} proposed, {summary.get('latest_patch_applied', 0)} applied, {summary.get('latest_patch_rejected', 0)} rejected",
+        (
+            "- queue: "
+            f"queued={summary.get('queue_queued', 0)}, processing={summary.get('queue_processing', 0)}, "
+            f"failed_retryable={summary.get('queue_failed_retryable', 0)}, "
+            f"blocked={summary.get('queue_blocked', 0)}, dead_letter={summary.get('queue_dead_letter', 0)}"
+        ),
         "",
         "Issues:",
     ]
@@ -1305,6 +1359,8 @@ def format_state_audit(audit: Mapping[str, Any]) -> str:
         if not isinstance(issue, Mapping):
             continue
         lines.append(f"- [{issue.get('severity', 'info')}] {issue.get('code', 'unknown')}: {issue.get('message', '')}")
+        if issue.get("action"):
+            lines.append(f"  action: {issue.get('action')}")
     return "\n".join(lines)
 
 
@@ -1689,6 +1745,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_drain.add_argument("--project-dir", default=".")
     queue_drain.add_argument("--limit", type=int, default=3)
     queue_drain.set_defaults(func=queue_drain_command)
+    queue_retry = queue_subparsers.add_parser("retry-blocked", help="Requeue blocked evidence jobs after fixing the root cause.")
+    queue_retry.add_argument("--project-dir", default=".")
+    queue_retry.add_argument("--reason", default="")
+    queue_retry.add_argument("job_id", nargs="*", help="Specific job ids to requeue; omit to requeue all blocked jobs.")
+    queue_retry.set_defaults(func=queue_retry_blocked_command)
 
     hook_parser = subparsers.add_parser("hook", help="Run reusable Soul hook adapters from stdin JSON.")
     hook_subparsers = hook_parser.add_subparsers(dest="hook_command", required=True)
@@ -1955,6 +2016,7 @@ def build_parser() -> argparse.ArgumentParser:
     reme_doctor = reme_subparsers.add_parser("doctor", help="Check whether ReMe is available for Soul evidence writes.")
     reme_doctor.add_argument("--project-dir", default=".")
     reme_doctor.add_argument("--create-workspace", action="store_true", help="Create .soul/reme when ReMe is available.")
+    reme_doctor.add_argument("--probe", action="store_true", help="Run a real auto_memory call in a probe workspace.")
     reme_doctor.set_defaults(func=reme_doctor_command)
     reme_init_config = reme_subparsers.add_parser(
         "init-config",

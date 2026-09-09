@@ -14,6 +14,8 @@ class StateProjectionPolicy:
     durable_knowledge_keywords: tuple[str, ...]
     episodic_prefixes: tuple[str, ...]
     meta_review_phrases: tuple[str, ...]
+    working_preference_signals: tuple[str, ...]
+    working_constraint_signals: tuple[str, ...]
     kind_rules: tuple[dict[str, Any], ...]
     high_priority_keywords: tuple[str, ...]
     why_remember_rules: tuple[dict[str, Any], ...]
@@ -27,6 +29,12 @@ class StateProjectionPolicy:
 
     def contains_durable_signal(self, lowered_sentence: str) -> bool:
         return contains_any(lowered_sentence, self.durable_knowledge_keywords)
+
+    def contains_working_preference_signal(self, lowered_sentence: str) -> bool:
+        return contains_any(lowered_sentence, self.working_preference_signals)
+
+    def contains_working_constraint_signal(self, lowered_sentence: str) -> bool:
+        return contains_any(lowered_sentence, self.working_constraint_signals)
 
     def infer_kind(self, statement: str) -> str:
         lowered = statement.lower()
@@ -75,6 +83,8 @@ def load_state_projection_policy() -> StateProjectionPolicy:
         durable_knowledge_keywords=tuple(str(value) for value in data.get("durable_knowledge_keywords", [])),
         episodic_prefixes=tuple(str(value) for value in data.get("episodic_prefixes", [])),
         meta_review_phrases=tuple(str(value) for value in data.get("meta_review_phrases", [])),
+        working_preference_signals=tuple(str(value) for value in data.get("working_preference_signals", [])),
+        working_constraint_signals=tuple(str(value) for value in data.get("working_constraint_signals", [])),
         kind_rules=tuple(rule for rule in data.get("kind_rules", []) if isinstance(rule, dict)),
         high_priority_keywords=tuple(str(value) for value in data.get("high_priority_keywords", [])),
         why_remember_rules=tuple(rule for rule in data.get("why_remember_rules", []) if isinstance(rule, dict)),

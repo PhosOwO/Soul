@@ -59,6 +59,30 @@
     "before it changes accepted state",
     "no classifier decided"
   ],
+  "working_preference_signals": [
+    "我希望",
+    "我不希望",
+    "我想",
+    "以后",
+    "下次",
+    "默认",
+    "prefer",
+    "preference",
+    "by default"
+  ],
+  "working_constraint_signals": [
+    "必须",
+    "不要",
+    "不能",
+    "不应该",
+    "应该",
+    "require",
+    "requires",
+    "must",
+    "do not",
+    "don't",
+    "should"
+  ],
   "kind_rules": [
     {
       "kind": "active_constraint",

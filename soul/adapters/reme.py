@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,16 @@ class ReMeCliAdapter:
 
     def search(self, *, query: str, limit: int = 5) -> ReMeJobResult:
         return self._run_command("search", query=query, limit=limit)
+
+    def probe_auto_memory(self) -> ReMeJobResult:
+        return ReMeCliAdapter(
+            self.project_dir,
+            workspace_dir=Path(tempfile.gettempdir()) / "soul-reme-probe",
+        ).auto_memory(
+            session_id="soul_reme_probe",
+            messages=[{"name": "user", "role": "user", "content": "Soul ReMe connectivity probe."}],
+            memory_hint="Connectivity probe only. Do not retain project knowledge from this message.",
+        )
 
     def read(self, *, path: str, start_line: int | None = None, end_line: int | None = None) -> ReMeJobResult:
         kwargs: dict[str, Any] = {"path": path}
@@ -276,8 +287,8 @@ class ReMeCliAdapter:
                 **hidden_subprocess_kwargs(),
             )
             if completed.returncode != 0:
-                detail = (completed.stderr or completed.stdout).strip()
-                hint = " Try `reme start` before using Soul ReMe-backed evidence writes."
+                detail = compact_process_output(completed.stderr or completed.stdout)
+                hint = " Try `reme start` if you need the ReMe HTTP/Web service."
                 return ReMePreflightResult(
                     ok=False,
                     cli_path=cli_path,
@@ -318,6 +329,21 @@ def split_answer_metadata(stdout: str) -> tuple[str, dict[str, Any]]:
             continue
         return "\n".join(lines[:index]).strip(), metadata
     return stdout.strip(), {}
+
+
+def compact_process_output(output: str, limit: int = 500) -> str:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if not lines:
+        return ""
+    interesting = [
+        line
+        for line in lines
+        if "error" in line.lower() or "permission" in line.lower() or "traceback" not in line.lower()
+    ]
+    text = " ".join(interesting[-4:] or lines[-4:])
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def reme_evidence_refs(search_metadata: dict[str, Any]) -> list[dict[str, Any]]:

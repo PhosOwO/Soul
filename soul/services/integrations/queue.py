@@ -25,6 +25,7 @@ EVENT_STARTED = "started"
 EVENT_COMPLETED = "completed"
 EVENT_FAILED = "failed"
 EVENT_BLOCKED = "blocked"
+EVENT_REQUEUED = "requeued"
 EVENT_DEAD_LETTER = "dead_letter"
 
 MAX_ATTEMPTS = 3
@@ -38,7 +39,7 @@ BLOCKED_REASON_CONFIGURATION = "configuration"
 BLOCKED_REASON_LLM_BILLING_OR_AUTH = "llm_billing_or_auth"
 BLOCKED_REASON_MISSING_RESOURCE = "missing_resource"
 
-QueueEventName = Literal["queued", "started", "completed", "failed", "blocked", "dead_letter"]
+QueueEventName = Literal["queued", "started", "completed", "failed", "blocked", "requeued", "dead_letter"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +134,54 @@ def drain_queue(project_dir: Path, *, limit: int = 3) -> dict[str, Any]:
     if processed:
         refresh_review_index_for_project(project_dir)
     return {"processed": processed, "locked": False}
+
+
+def requeue_blocked_jobs(
+    project_dir: Path,
+    *,
+    job_ids: list[str] | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    requested = set(job_ids or [])
+    requeued: list[str] = []
+    skipped: list[dict[str, str]] = []
+    with queue_lock(project_dir) as acquired:
+        if not acquired:
+            return {"requeued": requeued, "skipped": skipped, "locked": True}
+        state = replay_queue_state(project_dir)
+        jobs_by_id = {str(job.get("job_id") or ""): job for job in state["jobs"]}
+        if requested:
+            missing = sorted(job_id for job_id in requested if job_id not in jobs_by_id)
+            skipped.extend({"job_id": job_id, "reason": "not_found"} for job_id in missing)
+            target_jobs = [jobs_by_id[job_id] for job_id in sorted(requested & set(jobs_by_id))]
+        else:
+            target_jobs = state["jobs"]
+
+        completed_keys = {
+            str(event.get("idempotency_key"))
+            for event in state["events"]
+            if event.get("event") == EVENT_COMPLETED and event.get("idempotency_key")
+        }
+        for job in target_jobs:
+            job_id = str(job.get("job_id") or "")
+            idempotency_key = str(job.get("idempotency_key") or job_id)
+            status = state["status_by_job"].get(job_id, {})
+            if idempotency_key in completed_keys:
+                skipped.append({"job_id": job_id, "reason": "already_completed"})
+                continue
+            if status.get("event") != EVENT_BLOCKED:
+                skipped.append({"job_id": job_id, "reason": f"not_blocked:{status.get('event', EVENT_QUEUED)}"})
+                continue
+            append_queue_event(
+                project_dir,
+                job_id,
+                EVENT_REQUEUED,
+                attempt=0,
+                idempotency_key=idempotency_key,
+                reason=reason or "Blocked queue job was manually requeued.",
+            )
+            requeued.append(job_id)
+    return {"requeued": requeued, "skipped": skipped, "locked": False}
 
 
 def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str, Any]:
@@ -294,6 +343,8 @@ def queue_status(project_dir: Path) -> QueueSummary:
         event = status.get("event", EVENT_QUEUED)
         if event == EVENT_FAILED and status.get("retryable", False):
             counts["failed_retryable"] += 1
+        elif event == EVENT_REQUEUED:
+            counts["queued"] += 1
         elif event in counts:
             counts[cast(str, event)] += 1
         else:
@@ -302,9 +353,9 @@ def queue_status(project_dir: Path) -> QueueSummary:
     last_completed = next((event for event in reversed(state["events"]) if event.get("event") == EVENT_COMPLETED), None)
     last_error = next(
         (
-            event
-            for event in reversed(state["events"])
-            if event.get("event") in {EVENT_FAILED, EVENT_BLOCKED, EVENT_DEAD_LETTER}
+            status
+            for status in reversed(list(state["status_by_job"].values()))
+            if status.get("event") in {EVENT_FAILED, EVENT_BLOCKED, EVENT_DEAD_LETTER}
         ),
         None,
     )

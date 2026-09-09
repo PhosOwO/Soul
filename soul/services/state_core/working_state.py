@@ -28,6 +28,7 @@ from soul.services.state_core.knowledge import (
 )
 from soul.services.state_core.proposals import propose_patch
 from soul.services.state_core.state_projection import state_item_matches_task
+from soul.services.state_core.state_policy import load_state_projection_policy
 from soul.services.state_core.state_store import append_patch_proposal, brain_dir, load_state, utc_now
 from soul.services.state_core.working_state_policy import (
     DEFAULT_WORKING_EXPIRY,
@@ -231,7 +232,61 @@ def route_working_state_from_evidence(
 
 
 def infer_working_route(evidence: dict[str, Any]) -> dict[str, Any]:
-    return {"route": "no_state", "reason": "Working State requires an explicit structured candidate."}
+    candidate = infer_conservative_working_candidate(evidence)
+    if candidate is None:
+        return {"route": "no_state", "reason": "No conservative Working State candidate detected."}
+    return candidate
+
+
+def infer_conservative_working_candidate(evidence: dict[str, Any]) -> dict[str, Any] | None:
+    text = " ".join(
+        str(evidence.get(key) or "")
+        for key in ("task", "summary", "outcome")
+        if evidence.get(key)
+    )
+    policy = load_state_projection_policy()
+    for sentence in candidate_sentences(text):
+        lowered = sentence.lower()
+        if policy.contains_working_preference_signal(lowered):
+            return {
+                "route": "working_state",
+                "kind": WORKING_KIND_PREFERENCE,
+                "category": WORKING_CATEGORY_CANDIDATE_PREFERENCE,
+                "review_candidate": False,
+                "review_card": False,
+                "statement": sentence,
+                "reason": "The user stated a reusable preference or correction during this turn.",
+                "scope": compact_text(str(evidence.get("task") or "agent turn"), WORKING_SCOPE_MAX_LENGTH),
+                "confidence": 0.65,
+                "expires": "24h",
+                "review_after": "never",
+            }
+        if policy.contains_working_constraint_signal(lowered):
+            return {
+                "route": "working_state",
+                "kind": WORKING_KIND_CONSTRAINT,
+                "category": WORKING_CATEGORY_CANDIDATE_CONSTRAINT,
+                "review_candidate": True,
+                "review_card": False,
+                "statement": sentence,
+                "reason": "The turn contains explicit constraint language that may affect future agent behavior.",
+                "scope": compact_text(str(evidence.get("task") or "agent turn"), WORKING_SCOPE_MAX_LENGTH),
+                "confidence": 0.7,
+                "expires": "24h",
+                "review_after": "now",
+            }
+    return None
+
+
+def candidate_sentences(text: str) -> list[str]:
+    normalized = " ".join(text.replace("\n", " ").split())
+    if not normalized:
+        return []
+    return [
+        compact_text(sentence.strip(" -"), WORKING_STATEMENT_MAX_LENGTH)
+        for sentence in re.split(r"(?<=[.!?。！？])\s+|;\s+|；\s+", normalized)
+        if sentence.strip(" -")
+    ][:8]
 
 
 def working_category(*, kind: str, raw_category: str, status: str, review_card: bool) -> str:

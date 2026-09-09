@@ -153,9 +153,7 @@ def oldest_queue_backlog_at(state_owner_dir: Path) -> str | None:
             continue
         status = state["status_by_job"].get(job_id, {})
         event = status.get("event", EVENT_QUEUED)
-        if event in {EVENT_BLOCKED, EVENT_DEAD_LETTER}:
-            continue
-        if event not in {EVENT_QUEUED, EVENT_STARTED, EVENT_FAILED}:
+        if event not in {EVENT_QUEUED, EVENT_STARTED, EVENT_FAILED, EVENT_BLOCKED, EVENT_DEAD_LETTER}:
             continue
         if event == EVENT_FAILED and not status.get("retryable", False):
             continue
@@ -258,7 +256,7 @@ def scan_project_record(
             "failed_retryable": queue.failed_retryable,
             "blocked": queue.blocked,
             "dead_letter": queue.dead_letter,
-            "backlog": queue.queued + queue.failed_retryable,
+            "backlog": queue.queued + queue.failed_retryable + queue.blocked + queue.dead_letter,
             "oldest_backlog_at": oldest_queue_backlog_at(state_owner_dir),
         }
         result = {
