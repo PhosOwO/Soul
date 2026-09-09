@@ -659,7 +659,12 @@ def serve(project_dir: Path, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT,
     api = SoulApi(project_dir.resolve(), register=register)
     server = ThreadingHTTPServer((host, port), make_handler(api))
     print(f"Soul HTTP API listening on http://{host}:{port} for {project_dir.resolve()}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nSoul HTTP API stopped by keyboard interrupt.")
+    finally:
+        server.server_close()
 
 
 def parse_args() -> argparse.Namespace:
