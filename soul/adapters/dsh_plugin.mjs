@@ -1,4 +1,10 @@
+import { spawn } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 const DEFAULT_BASE_URL = "http://127.0.0.1:8765";
+const HEALTH_TIMEOUT_MS = 750;
+const STARTUP_TIMEOUT_MS = 5000;
 
 export const name = "soul-dsh";
 
@@ -6,16 +12,49 @@ export function apply(ctx, config = {}) {
   const baseUrl = String(config.baseUrl || process.env.SOUL_API_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
   const projectDir = String(config.projectDir || process.cwd());
   const searchLimit = Number(config.searchLimit || process.env.SOUL_REME_SEARCH_LIMIT || 5);
+  const autoStart = config.autoStart !== false && process.env.SOUL_DSH_AUTO_START !== "0";
+  const apiReady = ensureSoulApi({ baseUrl, projectDir, autoStart }, ctx);
 
   ctx.on("agent/turn-stopping", ({ agent, turn }) => {
-    void enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn }, ctx);
+    void enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn, apiReady }, ctx);
   });
 }
 
 export default apply;
 
-async function enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn }, ctx) {
+async function ensureSoulApi({ baseUrl, projectDir, autoStart }, ctx) {
   try {
+    if (await isHealthy(baseUrl)) {
+      log(ctx, "info", `Soul API is available at ${baseUrl}.`);
+      return true;
+    }
+    if (!autoStart) {
+      log(ctx, "warn", `Soul API is not available at ${baseUrl}. Start it with: soul-api --project-dir "${projectDir}"`);
+      return false;
+    }
+    const child = startSoulApi({ baseUrl, projectDir }, ctx);
+    if (!child) {
+      return false;
+    }
+    registerProcessCleanup(ctx, child);
+    const ready = await waitUntilHealthy(baseUrl, STARTUP_TIMEOUT_MS);
+    if (ready) {
+      log(ctx, "info", `Soul API started at ${baseUrl}.`);
+      return true;
+    }
+    log(ctx, "warn", `Soul API did not become healthy at ${baseUrl} within ${STARTUP_TIMEOUT_MS}ms.`);
+    return false;
+  } catch (error) {
+    log(ctx, "warn", `Soul API startup check failed: ${compactError(error)}`);
+    return false;
+  }
+}
+
+async function enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn, apiReady }, ctx) {
+  try {
+    if (apiReady) {
+      await apiReady;
+    }
     const session = agent?.session;
     const messages = normalizeMessages(session?.deriveMessages?.() || []);
     const task = latestRole(messages, "user");
@@ -58,6 +97,105 @@ async function enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn }, ct
     if (logger?.warn) {
       logger.warn(`Soul evidence enqueue failed: ${compactError(error)}`);
     }
+  }
+}
+
+function startSoulApi({ baseUrl, projectDir }, ctx) {
+  try {
+    const url = new URL(baseUrl);
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    const host = url.hostname || "127.0.0.1";
+    const binPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../bin/soul-api.js");
+    const child = spawn(process.execPath, [binPath, "--project-dir", projectDir, "--host", host, "--port", port], {
+      cwd: projectDir,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output = [];
+    const remember = (chunk) => {
+      const text = String(chunk || "").trim();
+      if (!text) {
+        return;
+      }
+      output.push(text);
+      if (output.length > 8) {
+        output.shift();
+      }
+    };
+    child.stdout?.on("data", remember);
+    child.stderr?.on("data", remember);
+    child.once("error", (error) => {
+      log(ctx, "warn", `Soul API process failed to start: ${compactError(error)}`);
+    });
+    child.once("exit", (code, signal) => {
+      if (code === 0 || signal) {
+        return;
+      }
+      const details = output.length ? ` Output: ${output.join(" ")}` : "";
+      log(ctx, "warn", `Soul API process exited early with code ${code}.${details}`);
+    });
+    return child;
+  } catch (error) {
+    log(ctx, "warn", `Soul API process launch failed: ${compactError(error)}`);
+    return null;
+  }
+}
+
+async function isHealthy(baseUrl) {
+  try {
+    const response = await fetchWithTimeout(`${baseUrl}/health`, HEALTH_TIMEOUT_MS);
+    if (!response.ok) {
+      return false;
+    }
+    const payload = await response.json().catch(() => ({}));
+    return payload?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntilHealthy(baseUrl, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isHealthy(baseUrl)) {
+      return true;
+    }
+    await sleep(250);
+  }
+  return false;
+}
+
+async function fetchWithTimeout(url, timeoutMs, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function registerProcessCleanup(ctx, child) {
+  const cleanup = () => {
+    if (!child.killed) {
+      child.kill();
+    }
+  };
+  if (typeof ctx?.effect === "function") {
+    ctx.effect(() => cleanup, "soul-dsh: soul-api");
+  } else {
+    process.once("exit", cleanup);
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function log(ctx, level, message) {
+  const logger = ctx?.logger;
+  if (typeof logger?.[level] === "function") {
+    logger[level](message);
   }
 }
 

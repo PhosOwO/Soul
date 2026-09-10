@@ -7,13 +7,15 @@
   <img src="https://img.shields.io/badge/review-low--noise-purple" alt="Low-noise review">
 </p>
 
-Soul is a lightweight current-state layer for coding agents. It keeps durable evidence in ReMe, separates accepted state from short-lived working assumptions, and exposes a small Review Card queue for low-cost confirmation.
+Soul is a lightweight current-state layer for coding agents. It records agent turns as evidence, keeps confirmed project memory separate from short-lived working assumptions, and exposes a small Review Card queue for low-cost confirmation.
 
 ```text
 agent turn -> ReMe evidence -> Working State / Accepted State -> next agent turn
 ```
 
 Soul is not a planner, executor, or full chat-history summarizer.
+
+Use Soul when you want an agent to remember project decisions, constraints, and useful evidence across sessions without silently rewriting accepted project state.
 
 ## ✨ What It Does
 
@@ -24,9 +26,46 @@ Soul is not a planner, executor, or full chat-history summarizer.
 | Working State | Temporary assumptions that may need confirmation | `.soul/state/working_state.json` |
 | Review Card | Low-noise confirm / needs-review decisions | `.soul/state/patch_proposals.jsonl`, working state |
 
-## 🚀 Quick Start
+## Quick Start: DeepSeek Harness
 
-From a checkout:
+Use this path if you want to install Soul as a DSH plugin.
+
+Install from GitHub and start DSH:
+
+```bash
+dsh plugin --profile web add github:PhosOwO/SoulKit
+dsh web
+```
+
+The package contains a standard `dsh.bundle` manifest. When `dsh web` starts, the plugin checks `http://127.0.0.1:8765/health` and starts the package-local `soul-api` automatically if it is not already running.
+
+Requirements: Python 3.11+, Node.js 22+ for DSH, and `dsh` on your `PATH`.
+
+This is enough for DSH to load the plugin and enqueue after-turn evidence. Current DSH support does not yet inject Current State before a turn.
+
+## Optional: Full Local Setup
+
+Use this path if you want the `soul` CLI, ReMe memory indexing, diagnostics, or the Review Card UI.
+
+```bash
+git clone https://github.com/PhosOwO/SoulKit.git
+cd SoulKit
+pip install -e .
+
+soul reme init-config --scope global
+# Fill LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL_NAME in the generated file.
+soul reme doctor --project-dir . --create-workspace
+```
+
+After one or more DSH turns, check the integration with:
+
+```bash
+soul dsh doctor --project-dir .
+```
+
+## Quick Start: Local CLI
+
+Use this path if you want to run Soul commands directly from this repository.
 
 ```bash
 pip install -e .
@@ -52,7 +91,7 @@ soul --review --review-project-dir .soul/sandboxes/review-mock --review-port 876
 
 For a screenshot/recording walkthrough, see [Review Card Demo](docs/review-card-demo.md).
 
-## 🧠 ReMe Setup
+## What Gets Stored
 
 Soul uses project-local ReMe storage at `.soul/reme/`. Package installation does not create this directory; it is created when ReMe preflight/start or evidence writing runs.
 
@@ -66,29 +105,23 @@ soul reme start --project-dir .
 
 On Windows, `soul reme start --project-dir .` starts ReMe hidden by default. Add `--foreground` when you want console logs.
 
-## 🔌 Agent Integrations
+State updates stay explicit: evidence may produce Working State, but Accepted State changes require review and confirmation.
+
+## Other Agent Integrations
 
 ```bash
 # Codex
 soul codex install --scope user --project-dir . --init
 soul codex doctor --project-dir .
 
-# DeepSeek Harness
-soul-api --project-dir . --port 8765
-dsh plugin --profile web add github:PhosOwO/SoulKit
-dsh web
-soul dsh doctor --project-dir .
-
 # TraeX
 soul traex install --scope user --project-dir . --init
 soul traex doctor --project-dir .
 ```
 
-DeepSeek Harness uses the local Soul API plus the standard `dsh.bundle` manifest in this package. The expected flow is: start `soul-api`, install the plugin with `dsh plugin --profile web add ...`, launch `dsh web`, then use `soul dsh doctor` to verify real after-turn evidence heartbeats.
+The Codex and TraeX installers write user-level integration config and can initialize `.soul/state` in the target project with `--init`.
 
-Current DSH support covers after-turn evidence enqueue through `/evidence/enqueue`. Before-turn Current State injection is still a follow-up item unless DSH exposes a stable prompt/context hook for the plugin.
-
-## 📁 Runtime Files
+## Runtime Files
 
 ```text
 .soul/
@@ -101,7 +134,7 @@ Current DSH support covers after-turn evidence enqueue through `/evidence/enqueu
 
 These files are runtime data and should normally stay out of Git.
 
-## 🧩 Commands
+## Useful Commands
 
 | Command | Use |
 | --- | --- |
@@ -112,7 +145,30 @@ These files are runtime data and should normally stay out of Git.
 | `soul --review` | Open the Review Card web UI |
 | `soul queue status` / `soul queue drain` | Inspect or process queued evidence jobs |
 
-## 📚 More
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `dsh` fails before opening | Run `node -v`; use Node.js 22+ for the DSH process. |
+| Soul plugin loads but evidence is not written | Run `soul dsh doctor --project-dir .`. |
+| `soul-api` cannot start from DSH | Check Python 3.11+ is available, or set `SOUL_PYTHON=/path/to/python3.11`. |
+| ReMe memory is missing or not searchable | Run `soul reme doctor --project-dir . --create-workspace`. |
+
+To run the API yourself:
+
+```bash
+soul-api --project-dir . --port 8765
+```
+
+To disable plugin auto-start in your DSH profile patch:
+
+```yaml
+- id: soul
+  config:
+    autoStart: false
+```
+
+## More
 
 - Design notes: [docs/soul-reme-integration.md](docs/soul-reme-integration.md)
 - Benchmark scorecard: [benchmarks/soulbench_v0/SCORECARD.md](benchmarks/soulbench_v0/SCORECARD.md)

@@ -3,4 +3,5 @@
       name: "@soulkit/soul/dsh"
       config:
         baseUrl: "http://127.0.0.1:8765"
+        autoStart: true
         searchLimit: 5
