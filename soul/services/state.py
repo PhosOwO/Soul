@@ -35,10 +35,13 @@ from soul.services.state_core.state_projection import (
     state_item_matches_task,
 )
 from soul.services.state_core.state_render import (
+    accepted_state_items_for_injection,
+    format_accepted_state_injection,
     format_items,
     format_projected_state_context,
     format_state_context,
     format_state_items,
+    is_injectable_accepted_state_item,
 )
 from soul.services.state_core.state_store import (
     DEFAULT_PATCH_LOG_NAME,
@@ -74,6 +77,8 @@ __all__ = [
     "edit_patch_proposal",
     "explicit_operations_from_evidence",
     "find_patch_proposal",
+    "accepted_state_items_for_injection",
+    "format_accepted_state_injection",
     "format_items",
     "format_projected_state_context",
     "format_state_context",
@@ -82,6 +87,7 @@ __all__ = [
     "infer_state_kind",
     "initial_state",
     "int_value",
+    "is_injectable_accepted_state_item",
     "is_state_item_active",
     "knowledge_points_from_evidence",
     "load_patch_proposals",

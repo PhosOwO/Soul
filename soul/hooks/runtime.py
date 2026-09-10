@@ -39,8 +39,12 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
 
     try:
         from soul.api import SoulApi, build_agent_injection
+        from soul.services.state_core.state_render import format_accepted_state_injection
 
         state = SoulApi(project_dir, register=False).get_state(task=prompt, limit=8)
+        injection = build_agent_injection(
+            format_accepted_state_injection(state.get("state", {}), limit=8, task=prompt)
+        )
         state_artifact = project_dir / ".soul" / "state" / "STATE.md"
         heartbeat = append_hook_run(
             project_dir,
@@ -59,7 +63,7 @@ def run_user_prompt_submit_hook(payload: dict[str, Any], *, host: HookHost) -> H
             "suppressOutput": True,
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": build_agent_injection(str(state.get("context", ""))),
+                "additionalContext": injection,
             },
         }
         add_heartbeat_diagnostic(output, heartbeat)

@@ -49,6 +49,7 @@ from soul.services.state_core.state_store import (
     load_state_markdown,
     save_state,
 )
+from soul.services.state_core.state_render import format_accepted_state_injection
 from soul.services.shared.state_types import PatchProposal
 
 
@@ -72,7 +73,7 @@ class SoulApi:
             "state_artifact": ".soul/state/STATE.md",
         }
         payload["scope"] = scope
-        payload["injection"] = build_agent_injection(payload["context"])
+        payload["injection"] = build_agent_injection(format_accepted_state_injection(state, limit=limit, task=task))
         self.record_integration_run(
             {
                 "host": source,
@@ -375,6 +376,8 @@ class SoulApi:
         return self.review_inbox.extend(project_id, candidate_id, hours=hours)
 
 def build_agent_injection(context: str) -> str:
+    if not context.strip():
+        return ""
     return (
         "[Soul Current State]\n"
         "Use Accepted State as confirmed project cognition. "

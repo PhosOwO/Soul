@@ -69,5 +69,5 @@ benchmarks/soulbench_v0/SCORECARD.md
 SoulBench 当前已经把“状态机制”和“评测展示”解耦。当前已经支持：
 
 - `--backend deepseek`：真实 DeepSeek API A/B/C，当前已支持。
-- DeepSeek Harness plugin：通过 `@deepseek-ai/dsh-soul-context` 注入 Soul Current State。
+- DeepSeek Harness plugin：通过 DSH bundle 入口 `@soulkit/soul/dsh` 注入 reviewed project Accepted State。
 - MCP server：通过 `soul-mcp` 暴露 `observe_evidence`、`propose_patch`、`apply_patch`、`get_projected_state`。

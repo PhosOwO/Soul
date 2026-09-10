@@ -373,9 +373,10 @@ def review_mock_command(args: argparse.Namespace) -> None:
 
 
 def agent_before_task_command(args: argparse.Namespace) -> None:
-    from soul.services.state_core.state_store import load_state_markdown
+    from soul.services.state_core.state_render import format_accepted_state_injection
+    from soul.services.state_core.state_store import load_state
 
-    print(load_state_markdown(limit=args.limit, task=args.task))
+    print(format_accepted_state_injection(load_state(), limit=args.limit, task=args.task))
 
 
 def api_serve_command(args: argparse.Namespace) -> None:
@@ -1124,6 +1125,9 @@ def build_dsh_patch(*, project_dir: Path, package_root: Path, api_url: str, sear
             f"        baseUrl: {quote_yaml_string(api_url)}",
             f"        projectDir: {quote_yaml_string(str(project_dir))}",
             f"        searchLimit: {int(search_limit)}",
+            "        injectAcceptedState: true",
+            "        stateLimit: 6",
+            "        maxStateChars: 6000",
             "",
         ]
     )

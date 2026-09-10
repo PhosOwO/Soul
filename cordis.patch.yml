@@ -5,3 +5,6 @@
         baseUrl: "http://127.0.0.1:8765"
         autoStart: true
         searchLimit: 5
+        injectAcceptedState: true
+        stateLimit: 6
+        maxStateChars: 6000

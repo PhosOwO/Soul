@@ -31,7 +31,11 @@
     "soul/**/*.mjs",
     "soul/policies/",
     "soul/schemas/",
-    "soul/templates/",
+    "soul/templates/**/*.html",
+    "soul/templates/**/*.swift",
+    "soul/templates/**/*.env",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
     "README.md",
     "pyproject.toml"
   ],
@@ -40,6 +44,6 @@
     "typecheck": "npx pyright"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   }
 }

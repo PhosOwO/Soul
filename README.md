@@ -7,22 +7,22 @@
   <img src="https://img.shields.io/badge/review-low--noise-purple" alt="Low-noise review">
 </p>
 
-Soul is a lightweight current-state layer for coding agents. It records agent turns as evidence, keeps confirmed project memory separate from short-lived working assumptions, and exposes a small Review Card queue for low-cost confirmation.
+Soul is a lightweight evidence and state companion for coding agents. It captures agent turns as local evidence, keeps confirmed project memory separate from short-lived working assumptions, and exposes a small Review Card queue for low-cost confirmation.
 
 ```text
-agent turn -> ReMe evidence -> Working State / Accepted State -> next agent turn
+agent turn -> local API -> ReMe-backed evidence -> Working State / Accepted State -> Review Card
 ```
 
 Soul is not a planner, executor, or full chat-history summarizer.
 
-Use Soul when you want an agent to remember project decisions, constraints, and useful evidence across sessions without silently rewriting accepted project state.
+Use Soul when you want to capture project decisions, constraints, and useful evidence from agent sessions without silently rewriting accepted project state.
 
 ## ✨ What It Does
 
 | Layer | Purpose | Files |
 | --- | --- | --- |
 | ReMe evidence | Durable, inspectable memory and source evidence | `.soul/reme/` |
-| Accepted State | Confirmed project cognition injected into future turns | `.soul/state/STATE.md`, `.soul/state/state.json` |
+| Accepted State | Confirmed project cognition, updated only through explicit review | `.soul/state/STATE.md`, `.soul/state/state.json` |
 | Working State | Temporary assumptions that may need confirmation | `.soul/state/working_state.json` |
 | Review Card | Low-noise confirm / needs-review decisions | `.soul/state/patch_proposals.jsonl`, working state |
 
@@ -41,7 +41,17 @@ The package contains a standard `dsh.bundle` manifest. When `dsh web` starts, th
 
 Requirements: Python 3.11+, Node.js 22+ for DSH, and `dsh` on your `PATH`.
 
-This is enough for DSH to load the plugin and enqueue after-turn evidence. Current DSH support does not yet inject Current State before a turn.
+This is enough for DSH to:
+
+- inject reviewed project Accepted State before model requests, once there is any
+- enqueue after-turn evidence
+- keep Working State and Review Card data local
+
+Accepted State is added through DSH's native system prompt assembly path. A fresh project only has Soul's built-in seed state, which is not injected. Working State is not injected by default because it is unconfirmed.
+
+The same accepted-only rule is used by the Codex and TraeX before-turn hooks.
+
+`@soulkit/soul/dsh` is the DSH bundle entrypoint. Codex and TraeX use the `soul codex install` and `soul traex install` commands below.
 
 ## Optional: Full Local Setup
 
@@ -166,6 +176,14 @@ To disable plugin auto-start in your DSH profile patch:
 - id: soul
   config:
     autoStart: false
+```
+
+To disable before-turn Accepted State injection:
+
+```yaml
+- id: soul
+  config:
+    injectAcceptedState: false
 ```
 
 ## More
