@@ -75,8 +75,8 @@ soul codex doctor --project-dir .
 
 # DeepSeek Harness
 soul-api --project-dir . --port 8765
-soul dsh install --project-dir .
-dsh web --patch .soul/dsh/soul.patch.yml
+dsh plugin --profile web add github:PhosOwO/SoulKit
+dsh web
 soul dsh doctor --project-dir .
 
 # TraeX
@@ -84,7 +84,7 @@ soul traex install --scope user --project-dir . --init
 soul traex doctor --project-dir .
 ```
 
-DeepSeek Harness uses the local Soul API plus a generated patch file. The expected flow is: start `soul-api`, install the DSH patch, launch `dsh web --patch ...`, then use `soul dsh doctor` to verify real after-turn evidence heartbeats.
+DeepSeek Harness uses the local Soul API plus the standard `dsh.bundle` manifest in this package. The expected flow is: start `soul-api`, install the plugin with `dsh plugin --profile web add ...`, launch `dsh web`, then use `soul dsh doctor` to verify real after-turn evidence heartbeats.
 
 Current DSH support covers after-turn evidence enqueue through `/evidence/enqueue`. Before-turn Current State injection is still a follow-up item unless DSH exposes a stable prompt/context hook for the plugin.
 

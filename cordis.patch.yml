@@ -1,0 +1,6 @@
+- insert:
+    - id: soul
+      name: "@soulkit/soul/dsh"
+      config:
+        baseUrl: "http://127.0.0.1:8765"
+        searchLimit: 5
