@@ -137,7 +137,8 @@ def normalize_project_record(record: dict[str, Any]) -> dict[str, Any]:
     project_id = str(record.get("project_id") or project_id_for_path(project_dir))
     resolved_state_root = default_state_root(project_dir)
     now = utc_now()
-    lifecycle = record.get("lifecycle") if isinstance(record.get("lifecycle"), dict) else {}
+    raw_lifecycle = record.get("lifecycle")
+    lifecycle: dict[str, Any] = raw_lifecycle if isinstance(raw_lifecycle, dict) else {}
     next_lifecycle_scan_at = record.get("next_lifecycle_scan_at") or lifecycle.get("next_lifecycle_scan_at")
     return {
         "project_id": project_id,
@@ -207,6 +208,9 @@ def register_project(
         ),
         None,
     )
+    existing_record: dict[str, Any] = existing if isinstance(existing, dict) else {}
+    existing_lifecycle_raw = existing_record.get("lifecycle")
+    existing_lifecycle: dict[str, Any] = existing_lifecycle_raw if isinstance(existing_lifecycle_raw, dict) else {}
     record = {
         "project_id": resolved_project_id,
         "identity": {"kind": "path_hash", "source": str(project)},
@@ -218,14 +222,14 @@ def register_project(
         "traces_root": str(project / SOUL_DIR_NAME / "traces"),
         "storage": STORAGE_LOCAL,
         "status": "active",
-        "first_seen_at": (existing or {}).get("first_seen_at") or now,
+        "first_seen_at": existing_record.get("first_seen_at") or now,
         "last_seen_at": now,
-        "last_scanned_at": (existing or {}).get("last_scanned_at"),
-        "last_reviewable_at": (existing or {}).get("last_reviewable_at"),
-        "next_lifecycle_scan_at": (existing or {}).get("next_lifecycle_scan_at"),
+        "last_scanned_at": existing_record.get("last_scanned_at"),
+        "last_reviewable_at": existing_record.get("last_reviewable_at"),
+        "next_lifecycle_scan_at": existing_record.get("next_lifecycle_scan_at"),
         "lifecycle": {
-            **((existing or {}).get("lifecycle") if isinstance((existing or {}).get("lifecycle"), dict) else {}),
-            "next_lifecycle_scan_at": (existing or {}).get("next_lifecycle_scan_at"),
+            **existing_lifecycle,
+            "next_lifecycle_scan_at": existing_record.get("next_lifecycle_scan_at"),
         },
         "unavailable_since": None,
     }

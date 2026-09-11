@@ -118,6 +118,7 @@ def propose_reme_transition(
     }
     working_evidence = {
         **patch_evidence,
+        **state_candidate_fields(evidence_payload),
         "summary": compact_transition_summary(
             " ".join(
                 part
@@ -166,6 +167,14 @@ def propose_reme_transition(
         "evidence_refs": refs,
         "working_state": working_state_result,
         "trace_path": str(trace_path.relative_to(project_dir)).replace("\\", "/"),
+    }
+
+
+def state_candidate_fields(evidence_payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: evidence_payload[key]
+        for key in ("working_state", "knowledge_points", "state_item", "state_items", "operations")
+        if key in evidence_payload
     }
 
 

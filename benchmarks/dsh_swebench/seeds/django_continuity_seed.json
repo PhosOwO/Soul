@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "project": "django/django continuity seed",
+  "version": 2,
+  "updated_at": "2026-09-11T10:05:00Z",
+  "current_state": {
+    "beliefs": [],
+    "constraints": [],
+    "open_questions": [],
+    "state_items": [
+      {
+        "id": "django-use-upstream-history-for-bugfixes",
+        "kind": "accepted_belief",
+        "statement": "For Django SWE-bench tasks, first search local git history after the base commit for the issue or PR number because the upstream fix is often already present in the repository history.",
+        "status": "accepted",
+        "priority": "high",
+        "confidence": 0.86,
+        "evidence_count": 1,
+        "latest_evidence": "django__django-15202 baseline/capture/soul runs all found the upstream URLValidator fix in git history and produced the canonical source patch.",
+        "created_at": "2026-09-11T10:05:00Z",
+        "updated_at": "2026-09-11T10:05:00Z",
+        "scope": {
+          "type": "repo",
+          "id": "django/django"
+        },
+        "applicability": {
+          "repos": [
+            "django/django"
+          ],
+          "task_tags": [
+            "swe-bench",
+            "django",
+            "bugfix"
+          ],
+          "commands": [
+            "git log <base>..main -- <suspect-file>",
+            "git show <fix-commit> -- <suspect-file>"
+          ]
+        }
+      },
+      {
+        "id": "django-avoid-committing-swebench-tests",
+        "kind": "active_constraint",
+        "statement": "For SWE-bench Django fixes, prefer leaving only source changes in the final patch; do not add benchmark regression tests when the evaluator will apply its own test patch.",
+        "status": "accepted",
+        "priority": "medium",
+        "confidence": 0.82,
+        "evidence_count": 1,
+        "latest_evidence": "django__django-15202 agents verified the upstream test patch separately and left source-only final patches for evaluator compatibility.",
+        "created_at": "2026-09-11T10:05:00Z",
+        "updated_at": "2026-09-11T10:05:00Z",
+        "scope": {
+          "type": "repo",
+          "id": "django/django"
+        },
+        "applicability": {
+          "repos": [
+            "django/django"
+          ],
+          "task_tags": [
+            "swe-bench",
+            "evaluation",
+            "tests"
+          ]
+        }
+      }
+    ]
+  },
+  "history": []
+}

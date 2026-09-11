@@ -9,6 +9,19 @@ const STATE_FETCH_TIMEOUT_MS = 1000;
 const DEFAULT_STATE_LIMIT = 6;
 const DEFAULT_MAX_STATE_CHARS = 6000;
 const SOUL_SECTION_NAME = "soul:accepted-state";
+const TASK_MARKERS = [
+  "External benchmark instance:",
+  "Problem statement:",
+];
+const NOISE_MARKERS = [
+  "<system-reminder>",
+  "<available_skills>",
+  "<environment_context>",
+  "<permissions instructions>",
+  "Current runtime context.",
+  "Approval policy:",
+  "Current DSH file policy:",
+];
 
 export const name = "soul-dsh";
 
@@ -86,7 +99,7 @@ async function enqueueTurn({ baseUrl, projectDir, searchLimit, agent, turn, apiR
     }
     const session = agent?.session;
     const messages = normalizeMessages(session?.deriveMessages?.() || []);
-    const task = latestRole(messages, "user");
+    const task = selectTask(messages);
     const outcome = latestRole(messages, "assistant");
     if (!task && !outcome) {
       return;
@@ -287,6 +300,9 @@ function normalizeMessages(messages) {
     if (!content) {
       continue;
     }
+    if (isNoiseMessage(role, content)) {
+      continue;
+    }
     normalized.push({ role, content });
   }
   return normalized;
@@ -327,10 +343,25 @@ function latestRole(messages, role) {
 function latestUserTask(agent) {
   try {
     const messages = normalizeMessages(agent?.session?.deriveMessages?.() || []);
-    return latestRole(messages, "user");
+    return selectTask(messages);
   } catch {
     return "";
   }
+}
+
+function selectTask(messages) {
+  const userMessages = messages.filter((message) => message.role === "user");
+  const benchmarkTask = userMessages.find((message) =>
+    TASK_MARKERS.some((marker) => message.content.includes(marker)),
+  );
+  return benchmarkTask?.content || userMessages.at(-1)?.content || "";
+}
+
+function isNoiseMessage(role, content) {
+  if (role === "system") {
+    return true;
+  }
+  return NOISE_MARKERS.some((marker) => content.includes(marker));
 }
 
 function compactError(error) {

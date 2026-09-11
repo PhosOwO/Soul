@@ -12,9 +12,12 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib import request
 from urllib.error import URLError
+
+from soul.services.shared.state_types import StateDoc
+from soul.services.state_core.state_store import save_state
 
 
 BENCH_DIR = Path(__file__).resolve().parent
@@ -62,8 +65,16 @@ def main(argv: list[str] | None = None) -> int:
     arms = parse_arms(args.arms)
     manifest_path = args.manifest.resolve()
     rows = load_manifest(manifest_path)
+    if args.instance_ids:
+        wanted_ids = {item.strip() for item in args.instance_ids.split(",") if item.strip()}
+        rows = [row for row in rows if str(row["instance_id"]) in wanted_ids]
+        missing_ids = sorted(wanted_ids - {str(row["instance_id"]) for row in rows})
+        if missing_ids:
+            raise SystemExit(f"Requested instance_id(s) not found in manifest: {', '.join(missing_ids)}")
     if args.max_instances is not None:
         rows = rows[: args.max_instances]
+    if not rows:
+        raise SystemExit("No instances selected for this run.")
 
     output_dir = args.output_dir.resolve()
     if output_dir.exists() and not args.resume and not args.dry_run:
@@ -83,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         print_dry_run(run_metadata, planned_runs)
         return 0
 
-    write_run_scaffold(output_dir, manifest_path, run_metadata, planned_runs)
+    write_run_scaffold(output_dir, manifest_path, run_metadata, planned_runs, seed_accepted_state=args.seed_accepted_state)
     if args.prepare_workspaces:
         prepare_workspaces(planned_runs, args)
     for planned in planned_runs:
@@ -108,6 +119,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="DSH model/profile reference recorded in metadata.")
     parser.add_argument("--timeout-seconds", type=int, default=1800, help="Per-task DSH timeout.")
     parser.add_argument("--max-instances", type=int, default=None, help="Limit instances for development runs.")
+    parser.add_argument("--instance-ids", default="", help="Optional comma-separated allowlist of instance IDs from the manifest.")
     parser.add_argument("--resume", action="store_true", help="Skip arm runs that already have metrics.json.")
     parser.add_argument("--dry-run", action="store_true", help="Validate manifest and print planned runs without executing DSH.")
     parser.add_argument("--dsh-bin", default="dsh", help="DSH executable name or path.")
@@ -123,6 +135,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--swebench-dataset-name", default=None, help="Official SWE-bench dataset name for evaluator.")
     parser.add_argument("--eval-max-workers", type=int, default=2, help="SWE-bench evaluator max_workers.")
     parser.add_argument("--eval-timeout", type=int, default=1800, help="SWE-bench evaluator timeout per instance.")
+    parser.add_argument("--seed-accepted-state", type=Path, default=None, help="Optional state.json template copied into inject-enabled Soul projects before DSH runs.")
     return parser.parse_args(argv)
 
 
@@ -202,6 +215,7 @@ def build_run_metadata(
         "prepare_workspaces": args.prepare_workspaces,
         "evaluate": args.evaluate,
         "swebench_dataset_name": args.swebench_dataset_name,
+        "seed_accepted_state": str(args.seed_accepted_state.resolve()) if args.seed_accepted_state else None,
     }
 
 
@@ -267,6 +281,8 @@ def write_run_scaffold(
     manifest_path: Path,
     metadata: dict[str, Any],
     planned_runs: list[PlannedRun],
+    *,
+    seed_accepted_state: Path | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "predictions").mkdir(exist_ok=True)
@@ -282,6 +298,17 @@ def write_run_scaffold(
         (planned.arm_dir / "soul_state_before").mkdir(exist_ok=True)
         (planned.arm_dir / "soul_state_after").mkdir(exist_ok=True)
         write_cordis_patch(planned)
+        if seed_accepted_state is not None and planned.arm.inject_accepted_state:
+            seed_soul_state(planned.soul_project_dir, seed_accepted_state)
+
+
+def seed_soul_state(project_dir: Path, seed_path: Path) -> None:
+    if not seed_path.exists():
+        raise SystemExit(f"Seed accepted state file does not exist: {seed_path}")
+    state = json.loads(seed_path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict):
+        raise SystemExit(f"Seed accepted state file must contain a JSON object: {seed_path}")
+    save_state(cast(StateDoc, state), project_dir)
 
 
 def write_cordis_patch(planned: PlannedRun, soul_api_url: str | None = None) -> None:
@@ -722,6 +749,9 @@ def dsh_env(dsh_home: Path | None = None) -> dict[str, str]:
         env["PATH"] = f"{DEFAULT_NODE22_BIN}:{env.get('PATH', '')}"
     if dsh_home is not None:
         env["DSH_HOME"] = str(dsh_home.resolve())
+    for key in list(env):
+        if key == "GIT_CONFIG_PARAMETERS" or key.startswith("GIT_CONFIG_KEY_") or key.startswith("GIT_CONFIG_VALUE_") or key == "GIT_CONFIG_COUNT":
+            env.pop(key, None)
     return env
 
 

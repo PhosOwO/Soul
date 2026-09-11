@@ -20,8 +20,11 @@ def is_windows() -> bool:
 def hidden_subprocess_kwargs() -> dict[str, Any]:
     if not is_windows():
         return {}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo_class = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_class is None:
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    startupinfo = startupinfo_class()
+    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
     startupinfo.wShowWindow = 0
     return {
         "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),

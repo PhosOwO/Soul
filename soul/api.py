@@ -26,7 +26,7 @@ from soul.services.shared.constants import (
 from soul.services.reme.reme_refs import compact_transition_summary, resolve_reme_workspace
 from soul.services.reme.reme_transition import propose_reme_transition as propose_reme_transition_service
 from soul.services.integrations.integration_runs import append_integration_run
-from soul.services.integrations.queue import enqueue_turn_evidence, stable_turn_id
+from soul.services.integrations.queue import enqueue_episode_event, enqueue_turn_evidence, stable_turn_id
 from soul.services.integrations.sessions import resolve_session_id
 from soul.services.scan_core import refresh_registered_project_for_state_owner
 from soul.services.project_resolver import register_project, resolve_project_dir
@@ -66,6 +66,7 @@ class SoulApi:
 
     def get_state(self, task: str = "", scope: str = "project", limit: int = 10, source: str = HOST_HTTP_API) -> dict[str, Any]:
         state = load_state(self.project_dir, project_name=self.project_dir.name)
+        injection_context = format_accepted_state_injection(state, limit=limit, task=task)
         payload = {
             "task": task,
             "state": state,
@@ -73,13 +74,15 @@ class SoulApi:
             "state_artifact": ".soul/state/STATE.md",
         }
         payload["scope"] = scope
-        payload["injection"] = build_agent_injection(format_accepted_state_injection(state, limit=limit, task=task))
+        payload["injection"] = build_agent_injection(injection_context)
         self.record_integration_run(
             {
                 "host": source,
                 "operation": OP_GET_STATE,
                 "status": STATUS_SUCCESS,
                 "injected": bool(payload.get("injection")),
+                "injected_state_chars": len(injection_context),
+                "injected_state_item_count": injection_context.count("\n- ["),
                 "task": compact_transition_summary(task, 160),
                 "state_version": (payload.get("state") or {}).get("version") if isinstance(payload.get("state"), dict) else None,
             }
@@ -177,6 +180,42 @@ class SoulApi:
             "job_id": job.get("job_id"),
             "session_id": session_id,
             "turn_id": turn_id,
+            "background_drain_started": background_drain_started,
+            "queue_path": ".soul/state/queue/jobs.jsonl",
+        }
+
+    def enqueue_episode_event(
+        self,
+        event: dict[str, Any],
+        *,
+        promotion: str = "off",
+        start_worker: bool = True,
+    ) -> dict[str, Any]:
+        job = enqueue_episode_event(self.project_dir, event=event, promotion=promotion)
+        background_drain_started = False
+        if start_worker:
+            from soul.hooks.runtime import start_queue_drain
+
+            background_drain_started = start_queue_drain(self.project_dir)
+        self.record_integration_run(
+            {
+                "host": str(event.get("host") or HOST_HTTP_API),
+                "operation": "enqueue_episode_event",
+                "status": STATUS_SUCCESS,
+                "memory_mode": MEMORY_MODE_SOUL_REME,
+                "episode_id": event.get("episode_id"),
+                "event_type": event.get("event_type"),
+                "job_id": job.get("job_id"),
+                "background_drain_started": background_drain_started,
+            }
+        )
+        self.refresh_current_review_project()
+        return {
+            "memory_mode": MEMORY_MODE_SOUL_REME,
+            "queued": True,
+            "job_id": job.get("job_id"),
+            "episode_id": (job.get("event") or {}).get("episode_id") if isinstance(job.get("event"), dict) else event.get("episode_id"),
+            "event_type": (job.get("event") or {}).get("event_type") if isinstance(job.get("event"), dict) else event.get("event_type"),
             "background_drain_started": background_drain_started,
             "queue_path": ".soul/state/queue/jobs.jsonl",
         }
@@ -462,6 +501,18 @@ def make_handler(api: SoulApi) -> type[BaseHTTPRequestHandler]:
                             evidence=payload.get("evidence"),
                             episode=payload.get("episode"),
                             reme=payload.get("reme"),
+                        )
+                    )
+                    return
+                if self.path == "/episodes/events":
+                    event = payload.get("event")
+                    if not isinstance(event, dict):
+                        self.write_json({"error": "event_required"}, status=400)
+                        return
+                    self.write_json(
+                        api.enqueue_episode_event(
+                            event=event,
+                            promotion=str(payload.get("promotion") or "off"),
                         )
                     )
                     return

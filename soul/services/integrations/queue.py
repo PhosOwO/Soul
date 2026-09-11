@@ -11,8 +11,17 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import uuid4
 
+from soul.services.integrations.episodes import (
+    append_episode_event,
+    assemble_episode_view,
+    episode_event_from_turn_evidence,
+    evidence_from_episode_view,
+    find_episode_view,
+)
 from soul.services.reme.reme_transition import propose_reme_transition
+from soul.services.shared.constants import WORKING_STATUS_WORKING
 from soul.services.state_core.state_store import state_paths, utc_now
+from soul.services.state_core.review.actions import accept_review_candidate
 
 QUEUE_DIR_NAME = "queue"
 JOBS_FILE_NAME = "jobs.jsonl"
@@ -20,6 +29,8 @@ EVENTS_FILE_NAME = "events.jsonl"
 LOCK_FILE_NAME = "worker.lock"
 
 JOB_TYPE_TURN_EVIDENCE = "turn_evidence"
+JOB_TYPE_EPISODE_EVENT = "episode_event"
+JOB_TYPE_EPISODE_REFLECTION = "episode_reflection"
 EVENT_QUEUED = "queued"
 EVENT_STARTED = "started"
 EVENT_COMPLETED = "completed"
@@ -86,20 +97,58 @@ def enqueue_turn_evidence(
     turn_id: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
+    return enqueue_episode_event(
+        project_dir,
+        event=episode_event_from_turn_evidence(source=source, session_id=session_id, turn_id=turn_id, payload=payload),
+        promotion=str(payload.get("promotion") or "off"),
+    )
+
+
+def enqueue_episode_event(
+    project_dir: Path,
+    *,
+    event: dict[str, Any],
+    promotion: str = "off",
+) -> dict[str, Any]:
     paths = queue_paths(project_dir)
     paths.root.mkdir(parents=True, exist_ok=True)
-    idempotency_key = f"{source}:{session_id}:{turn_id}"
+    normalized_event, _ = append_episode_event(project_dir, event)
+    event_type = str(normalized_event.get("event_type") or "turn_completed")
+    episode_id = str(normalized_event.get("episode_id") or "")
+    idempotency_key = str(normalized_event.get("idempotency_key") or f"{episode_id}:{event_type}:{uuid4().hex}")
     job = {
-        "job_id": "turn_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8],
-        "type": JOB_TYPE_TURN_EVIDENCE,
+        "job_id": "episode_event_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8],
+        "type": JOB_TYPE_EPISODE_EVENT,
         "created_at": utc_now(),
-        "source": source,
-        "session_id": session_id,
-        "turn_id": turn_id,
         "idempotency_key": idempotency_key,
-        "payload": payload,
+        "promotion": normalize_promotion(promotion),
+        "event": normalized_event,
     }
     append_jsonl(paths.jobs_path, job)
+    append_queue_event(project_dir, job["job_id"], EVENT_QUEUED, idempotency_key=idempotency_key)
+    return job
+
+
+def enqueue_episode_reflection(
+    project_dir: Path,
+    *,
+    episode_id: str,
+    episode_version: int,
+    reason: str,
+    promotion: str = "off",
+) -> dict[str, Any]:
+    idempotency_key = f"reflection:{episode_id}:{episode_version}:{reason}:{normalize_promotion(promotion)}"
+    job = {
+        "job_id": "reflection_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8],
+        "type": JOB_TYPE_EPISODE_REFLECTION,
+        "created_at": utc_now(),
+        "idempotency_key": idempotency_key,
+        "episode_id": episode_id,
+        "episode_version": episode_version,
+        "reason": reason,
+        "promotion": normalize_promotion(promotion),
+    }
+    append_jsonl(queue_paths(project_dir).jobs_path, job)
     append_queue_event(project_dir, job["job_id"], EVENT_QUEUED, idempotency_key=idempotency_key)
     return job
 
@@ -127,8 +176,12 @@ def drain_queue(project_dir: Path, *, limit: int = 3) -> dict[str, Any]:
     with queue_lock(project_dir) as acquired:
         if not acquired:
             return {"processed": processed, "locked": True}
-        state = replay_queue_state(project_dir)
-        for selection in select_runnable_jobs(state, now=datetime.now(UTC), limit=limit):
+        while len(processed) < limit:
+            state = replay_queue_state(project_dir)
+            selections = select_runnable_jobs(state, now=datetime.now(UTC), limit=limit - len(processed))
+            if not selections:
+                break
+            selection = selections[0]
             result = process_queue_job(project_dir, selection)
             processed.append(result)
     if processed:
@@ -190,7 +243,12 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
     idempotency_key = str(job.get("idempotency_key") or job_id)
     append_queue_event(project_dir, job_id, EVENT_STARTED, attempt=selection.attempt, idempotency_key=idempotency_key)
     try:
-        if job.get("type") != JOB_TYPE_TURN_EVIDENCE:
+        job_type = str(job.get("type") or "")
+        if job_type == JOB_TYPE_EPISODE_EVENT:
+            return process_episode_event_job(project_dir, job, selection.attempt, idempotency_key)
+        if job_type == JOB_TYPE_EPISODE_REFLECTION:
+            return process_episode_reflection_job(project_dir, job, selection.attempt, idempotency_key)
+        if job_type != JOB_TYPE_TURN_EVIDENCE:
             append_queue_event(
                 project_dir,
                 job_id,
@@ -226,48 +284,49 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             )
             return {"job_id": job_id, "status": EVENT_DEAD_LETTER}
 
-        evidence = dict(payload)
-        evidence.setdefault("source", job.get("source") or "queue")
-        evidence.setdefault("session_id", job.get("session_id") or "")
-        evidence["queue"] = {
-            "job_id": job_id,
-            "idempotency_key": idempotency_key,
-        }
-        result = propose_reme_transition(
-            project_dir=project_dir,
-            evidence=evidence,
-            episode={
-                "task": task,
-                "outcome": outcome,
-                "session_id": job.get("session_id") or "",
-                "events": payload.get("events", []),
-                "messages": payload.get("messages", []),
-            },
-            reme=payload.get("reme") if isinstance(payload.get("reme"), dict) else None,
+        source = str(job.get("source") or payload.get("source") or "queue")
+        session_id = str(job.get("session_id") or payload.get("session_id") or "")
+        turn_id = str(job.get("turn_id") or payload.get("turn_id") or stable_turn_id(payload))
+        episode_event, appended = append_episode_event(
+            project_dir,
+            episode_event_from_turn_evidence(source=source, session_id=session_id, turn_id=turn_id, payload=payload),
         )
-        working_state = result.get("working_state")
-        working_item = working_state.get("item") if isinstance(working_state, dict) else None
-        working_state_id = working_item.get("id") if isinstance(working_item, dict) else None
+        view = assemble_episode_view(project_dir, str(episode_event["episode_id"]))
+        reflection_job = None
+        if appended and view.get("ready_for_reflection"):
+            reflection_job = enqueue_episode_reflection(
+                project_dir,
+                episode_id=str(view["episode_id"]),
+                episode_version=int(view.get("episode_version") or 1),
+                reason="turn_completed",
+                promotion=str(job.get("promotion") or "off"),
+            )
         append_queue_event(
             project_dir,
             job_id,
             EVENT_COMPLETED,
             attempt=selection.attempt,
             idempotency_key=idempotency_key,
-            working_state_id=working_state_id,
-            working_state_route=working_state.get("route") if isinstance(working_state, dict) else None,
-            memory_mode=result.get("memory_mode"),
-            reme_write_mode=result.get("reme_write_mode"),
+            episode_id=view.get("episode_id"),
+            episode_version=view.get("episode_version"),
+            episode_event_appended=appended,
+            reflection_job_id=reflection_job.get("job_id") if isinstance(reflection_job, dict) else None,
         )
-        return {"job_id": job_id, "status": EVENT_COMPLETED, "working_state_id": working_state_id}
+        return {
+            "job_id": job_id,
+            "status": EVENT_COMPLETED,
+            "episode_id": view.get("episode_id"),
+            "episode_version": view.get("episode_version"),
+            "reflection_job_id": reflection_job.get("job_id") if isinstance(reflection_job, dict) else None,
+        }
     except Exception as exc:
         retryable = is_retryable_error(exc)
-        event: QueueEventName = EVENT_FAILED if retryable and selection.attempt < MAX_ATTEMPTS else EVENT_BLOCKED
-        blocked_reason = None if event != EVENT_BLOCKED else blocked_reason_for_error(exc)
+        queue_event: QueueEventName = EVENT_FAILED if retryable and selection.attempt < MAX_ATTEMPTS else EVENT_BLOCKED
+        blocked_reason = None if queue_event != EVENT_BLOCKED else blocked_reason_for_error(exc)
         append_queue_event(
             project_dir,
             job_id,
-            event,
+            queue_event,
             attempt=selection.attempt,
             idempotency_key=idempotency_key,
             error=compact_error(exc),
@@ -275,7 +334,173 @@ def process_queue_job(project_dir: Path, selection: QueueSelection) -> dict[str,
             retryable=retryable,
             next_run_at=next_run_at(selection.attempt) if retryable and selection.attempt < MAX_ATTEMPTS else None,
         )
-        return {"job_id": job_id, "status": event, "error": compact_error(exc), "blocked_reason": blocked_reason}
+        return {"job_id": job_id, "status": queue_event, "error": compact_error(exc), "blocked_reason": blocked_reason}
+
+
+def process_episode_event_job(
+    project_dir: Path,
+    job: dict[str, Any],
+    attempt: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    event_payload = job.get("event")
+    job_id = str(job["job_id"])
+    if not isinstance(event_payload, dict):
+        append_queue_event(
+            project_dir,
+            job_id,
+            EVENT_DEAD_LETTER,
+            attempt=attempt,
+            idempotency_key=idempotency_key,
+            error="episode_event job requires event object",
+        )
+        return {"job_id": job_id, "status": EVENT_DEAD_LETTER}
+
+    event, appended = append_episode_event(project_dir, event_payload)
+    view = assemble_episode_view(project_dir, str(event["episode_id"]))
+    reflection_job = None
+    if view.get("ready_for_reflection"):
+        reflection_job = enqueue_episode_reflection(
+            project_dir,
+            episode_id=str(view["episode_id"]),
+            episode_version=int(view.get("episode_version") or 1),
+            reason=str(event.get("event_type") or "episode_event"),
+            promotion=str(job.get("promotion") or "off"),
+        )
+    append_queue_event(
+        project_dir,
+        job_id,
+        EVENT_COMPLETED,
+        attempt=attempt,
+        idempotency_key=idempotency_key,
+        episode_id=view.get("episode_id"),
+        episode_version=view.get("episode_version"),
+        episode_event_appended=appended,
+        reflection_job_id=reflection_job.get("job_id") if isinstance(reflection_job, dict) else None,
+    )
+    return {
+        "job_id": job_id,
+        "status": EVENT_COMPLETED,
+        "episode_id": view.get("episode_id"),
+        "episode_version": view.get("episode_version"),
+        "reflection_job_id": reflection_job.get("job_id") if isinstance(reflection_job, dict) else None,
+    }
+
+
+def process_episode_reflection_job(
+    project_dir: Path,
+    job: dict[str, Any],
+    attempt: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    job_id = str(job["job_id"])
+    episode_id = str(job.get("episode_id") or "")
+    view = find_episode_view(project_dir, episode_id)
+    if view is None:
+        append_queue_event(
+            project_dir,
+            job_id,
+            EVENT_DEAD_LETTER,
+            attempt=attempt,
+            idempotency_key=idempotency_key,
+            error=f"episode view not found: {episode_id}",
+        )
+        return {"job_id": job_id, "status": EVENT_DEAD_LETTER}
+    if not view.get("ready_for_reflection"):
+        append_queue_event(
+            project_dir,
+            job_id,
+            EVENT_COMPLETED,
+            attempt=attempt,
+            idempotency_key=idempotency_key,
+            episode_id=episode_id,
+            episode_version=view.get("episode_version"),
+            reflection_skipped=True,
+            reason="episode_not_ready",
+        )
+        return {"job_id": job_id, "status": EVENT_COMPLETED, "episode_id": episode_id, "reflection_skipped": True}
+
+    evidence = evidence_from_episode_view(view)
+    evidence["queue"] = {"job_id": job_id, "idempotency_key": idempotency_key}
+    raw_candidate_inputs = view.get("candidate_inputs")
+    candidate_inputs: dict[str, Any] = raw_candidate_inputs if isinstance(raw_candidate_inputs, dict) else {}
+    result = propose_reme_transition(
+        project_dir=project_dir,
+        evidence=evidence,
+        episode={
+            "task": evidence.get("task", ""),
+            "outcome": evidence.get("outcome", ""),
+            "session_id": view.get("session_id") or "",
+            "events": view.get("event_refs", []),
+            "messages": [],
+        },
+        reme=candidate_inputs.get("reme") if isinstance(candidate_inputs.get("reme"), dict) else None,
+    )
+    working_state = result.get("working_state")
+    working_item = working_state.get("item") if isinstance(working_state, dict) else None
+    working_state_id = working_item.get("id") if isinstance(working_item, dict) else None
+    promotion_result = maybe_promote_working_state(project_dir, job, working_item)
+    append_queue_event(
+        project_dir,
+        job_id,
+        EVENT_COMPLETED,
+        attempt=attempt,
+        idempotency_key=idempotency_key,
+        episode_id=episode_id,
+        episode_version=view.get("episode_version"),
+        working_state_id=working_state_id,
+        working_state_route=working_state.get("route") if isinstance(working_state, dict) else None,
+        memory_mode=result.get("memory_mode"),
+        reme_write_mode=result.get("reme_write_mode"),
+        promotion=normalize_promotion(job.get("promotion")),
+        promoted_state_item_id=promotion_result.get("state_item_id") if promotion_result else None,
+        promotion_skipped_reason=promotion_result.get("skipped_reason") if promotion_result else None,
+    )
+    return {
+        "job_id": job_id,
+        "status": EVENT_COMPLETED,
+        "episode_id": episode_id,
+        "working_state_id": working_state_id,
+        "promotion": promotion_result,
+    }
+
+
+def maybe_promote_working_state(
+    project_dir: Path,
+    job: dict[str, Any],
+    working_item: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if normalize_promotion(job.get("promotion")) != "on":
+        return None
+    if not isinstance(working_item, dict):
+        return {"skipped_reason": "no_working_state"}
+    working_id = str(working_item.get("id") or "")
+    if not working_id:
+        return {"skipped_reason": "missing_working_state_id"}
+    if working_item.get("status") != WORKING_STATUS_WORKING:
+        return {"working_state_id": working_id, "skipped_reason": f"unsafe_status:{working_item.get('status')}"}
+    if bool(working_item.get("review_candidate", False)):
+        return {"working_state_id": working_id, "skipped_reason": "requires_review"}
+    if working_item.get("conflicts_with"):
+        return {"working_state_id": working_id, "skipped_reason": "conflict"}
+
+    result = accept_review_candidate(project_dir, f"working:{working_id}", confirmed_by="soul-promotion")
+    state_items = result.get("result", {}).get("state", {}).get("current_state", {}).get("state_items", [])
+    accepted_id = ""
+    if isinstance(state_items, list):
+        accepted_id = next(
+            (
+                str(item.get("id") or "")
+                for item in reversed(state_items)
+                if isinstance(item, dict) and str(item.get("statement") or "") == str(working_item.get("statement") or "")
+            ),
+            "",
+        )
+    return {
+        "working_state_id": working_id,
+        "state_item_id": accepted_id,
+        "confirmed_by": "soul-promotion",
+    }
 
 
 def refresh_review_index_for_project(project_dir: Path) -> None:
@@ -486,6 +711,10 @@ def stable_turn_id(payload: dict[str, Any]) -> str:
         json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()[:12]
     return "turn-" + digest
+
+
+def normalize_promotion(value: Any) -> str:
+    return "on" if str(value or "").lower() == "on" else "off"
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
