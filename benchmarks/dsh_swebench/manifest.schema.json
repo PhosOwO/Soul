@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DSH SWE-bench runner manifest row",
+  "type": "object",
+  "required": [
+    "instance_id",
+    "dataset",
+    "repo",
+    "problem_statement",
+    "group_id",
+    "sequence_index",
+    "evaluation"
+  ],
+  "properties": {
+    "instance_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset": {
+      "type": "string",
+      "minLength": 1,
+      "description": "External dataset name, for example swe-bench-lite or swe-bench-verified."
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_url": {
+      "type": "string",
+      "description": "Optional clone URL. Defaults to https://github.com/<repo>.git."
+    },
+    "base_commit": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bug_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "problem_statement": {
+      "type": "string",
+      "minLength": 1
+    },
+    "test_command": {
+      "type": "string"
+    },
+    "group_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "For continuity runs, use the external repo or project id. For independent runs, use instance_id."
+    },
+    "sequence_index": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "workspace": {
+      "type": "string",
+      "description": "Optional pre-prepared local workspace path."
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["swebench", "bugsinpy", "defects4j"]
+        },
+        "instance_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "anyOf": [
+    { "required": ["base_commit"] },
+    { "required": ["bug_id"] }
+  ],
+  "additionalProperties": true
+}

@@ -43,3 +43,5 @@ docs/*
 
 # Generated benchmark outputs
 benchmarks/**/results/**
+benchmarks/**/workspaces/**
+logs/run_evaluation/**
